@@ -407,9 +407,14 @@ public partial class MainWindow : Window
                 AppLog.Info($"Authoring completed with status {result.Status} ({result.Backend}): {result.Summary}");
             }
 
-            if (result.Status == AuthoringResultStatus.Succeeded)
+            if (result.Status == AuthoringResultStatus.Succeeded && ViewModel.BurnEnabled)
             {
                 await ExecuteBurnStageAsync(project, workingDirectory, markBurnStageStarted: true);
+            }
+            else if (result.Status == AuthoringResultStatus.Succeeded)
+            {
+                ViewModel.EndBusy("Build completed. Burn skipped (toggle is off).");
+                AppLog.Info("Build completed. Burn stage skipped by user toggle.");
             }
         }
         catch (Exception ex)
@@ -553,6 +558,38 @@ public partial class MainWindow : Window
     }
 
     private void OnRetryBurnClick(object? sender, RoutedEventArgs e) => OnBuildAndBurnClick(sender, e);
+
+    private void OnTestOutputClick(object? sender, RoutedEventArgs e)
+    {
+        var workingDir = ViewModel.LastAuthoredWorkingDirectory;
+        if (string.IsNullOrEmpty(workingDir))
+        {
+            ViewModel.EndBusy("No authored output available. Run a build first.");
+            return;
+        }
+
+        var project = ViewModel.BuildProject();
+        var toolStatuses = _toolDiscoveryService.Discover(project.Settings);
+        var vlcTool = toolStatuses.FirstOrDefault(t => t.ToolName == "vlc");
+        if (vlcTool is null || !vlcTool.IsAvailable || string.IsNullOrEmpty(vlcTool.ResolvedPath))
+        {
+            ViewModel.EndBusy("VLC is not available. Configure its path in Tool Paths or install VLC.");
+            return;
+        }
+
+        try
+        {
+            var dvdUri = $"dvd:///{workingDir.Replace('\\', '/')}";
+            Process.Start(new ProcessStartInfo(vlcTool.ResolvedPath, dvdUri) { UseShellExecute = false });
+            ViewModel.AddRecentActivity($"Launched VLC: {dvdUri}");
+            AppLog.Info($"Test output launched: {vlcTool.ResolvedPath} {dvdUri}");
+        }
+        catch (Exception ex)
+        {
+            ViewModel.EndBusy($"Failed to launch VLC: {ex.Message}");
+            AppLog.Error("Failed to launch VLC for test output.", ex);
+        }
+    }
 
     private void OnPreviewMenuClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewMenuUnavailable();
 

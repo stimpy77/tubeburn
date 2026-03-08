@@ -49,6 +49,7 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         var standard = request.Project.Settings.Standard;
         var vobFileSizes = new List<long>();
         var vobDurationsPts = new List<long>();
+        var allVobuSectorOffsets = new List<IReadOnlyList<int>>();
         var vobIndex = 1;
         var nextStartSector = 0;
         foreach (var video in request.Project.Videos)
@@ -70,12 +71,13 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 startSector: nextStartSector);
             vobFileSizes.Add(muxResult.FileSizeBytes);
             vobDurationsPts.Add(muxResult.DurationPts);
+            allVobuSectorOffsets.Add(muxResult.VobuSectorOffsets);
             nextStartSector += (int)(muxResult.FileSizeBytes / 2048);
             vobIndex++;
         }
 
         // Generate spec-compliant IFO files using actual VOB sizes and durations.
-        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts);
+        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.IFO"), vtsIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.BUP"), vtsIfo, cancellationToken);
 
@@ -108,6 +110,10 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 {
                     return;
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {
@@ -173,13 +179,6 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 Marshal.FreeCoTaskMem(bytesReadPtr);
             }
         }
-    }
-
-    private static async Task CopyFileAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
-    {
-        await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-        await using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await source.CopyToAsync(destination, cancellationToken);
     }
 
     private static Task<T> RunStaAsync<T>(Func<T> action, CancellationToken cancellationToken)

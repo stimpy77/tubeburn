@@ -1,6 +1,6 @@
 # TubeBurn
 
-A cross-platform GUI application that takes a list of YouTube videos, downloads them, creates a DVD-Video disc with a two-level menu system, and burns it.
+A cross-platform GUI application (.NET 10, C#, Avalonia UI) that takes a list of YouTube videos, downloads them, creates a DVD-Video disc with a two-level menu system, and burns it.
 
 ## Overview
 
@@ -64,26 +64,25 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 - Generate button highlight overlays:
   - Create subpicture images defining button regions (normal, selected, activated states)
   - Mux with spumux-equivalent logic
-- Produce the dvdauthor XML (or equivalent internal representation) defining:
-  - VMGM (Video Manager) menus for Level 1
-  - Per-titleset menus for Level 2
+- Produce menu PGCs defining:
+  - VMGM (Video Manager) menu PGCs for Level 1 (channel select)
+  - VTSM menu PGCs for Level 2 (video select per channel)
   - Button navigation commands (jump to titleset, jump to title, resume)
   - Post-playback commands (return to menu)
 
 ### DVD Authoring Phase
 - Build the VIDEO_TS directory structure:
-  - VIDEO_TS.IFO / VIDEO_TS.BUP — disc-level navigation
+  - VIDEO_TS.IFO / VIDEO_TS.BUP — disc-level navigation (VMG)
   - VTS_xx_0.IFO / VTS_xx_0.BUP — per-titleset navigation
   - VTS_xx_0.VOB — menu VOBs (with subpicture highlights)
   - VTS_xx_1.VOB (through _9.VOB) — video content, split at 1GB boundaries
 - Generate all IFO binary structures:
   - PGC (Program Chain) tables
   - Cell address and playback info tables
-  - VOBU address maps (TMAPTI)
+  - VOBU address maps (VTS_VOBU_ADMAP)
   - Navigation packets (NV_PCK) in each VOB
-- Long-term core: custom "dvdauthor replacement" logic
-- Long-term implementation plan: port behavior from `reference/dvdauthor` into native C# or Rust modules
-- For MVP Phase 1, it is acceptable to call external authoring tools to produce a valid autoplay DVD while the in-repo port is developed in later phases
+- Native authoring engine (`NativeAuthoringPipeline`) generates all structures in C#
+- External authoring bridge (`ExternalAuthoringBridge`) available as fallback via dvdauthor + mkisofs
 
 ### Disc Capacity Validation
 - Calculate total disc usage before authoring/burning:
@@ -104,28 +103,105 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 - Detect available DVD burners
 - Write VIDEO_TS structure to disc as UDF 1.02 + ISO9660 bridge filesystem
 - Backend selection by platform:
-  - Windows: ImgBurn CLI preferred; fallback to native IMAPI path (future)
-  - Linux: growisofs/cdrecord path
+  - Windows: native IMAPI2 (primary); ImgBurn CLI fallback (opt-in via `TB_ENABLE_IMGBURN_FALLBACK=1`)
+  - Linux: growisofs
   - macOS: growisofs or native path (future)
 - If preferred backend is unavailable, surface actionable setup instructions in the GUI
 - Show burn progress
+- Build-only mode available via burn toggle (skips burn stage)
 
 ### Post-Burn
 - Verify disc (optional read-back check)
 - Eject disc
 
+## DVD PGC Architecture
+
+This section defines the Program Chain (PGC) structure used for title playback and the planned menu system. PGCs exist in two separate domains within the DVD spec:
+
+- **Title domain** (VTS_PGCIT): PGCs for video playback
+- **Menu domain** (VMGM_PGCI_UT / VTSM_PGCI_UT): PGCs for interactive menus
+
+### Title Playback — Single PGC with Multiple Programs
+
+All videos in a VTS are placed into a **single PGC** with one program (chapter) per video. This is the current implemented structure.
+
+```
+VTS_PGCIT:
+  PGC #1 (entry PGC)
+    nr_of_programs = N  (one per video)
+    nr_of_cells    = N  (one per video)
+    program_map    = [1, 2, 3, ..., N]  (each cell starts a new program)
+    cell_playback  = [cell_1, cell_2, ..., cell_N]
+    cell_position  = [vob_1/cell_1, vob_2/cell_1, ..., vob_N/cell_1]
+    post_command   = Exit
+
+VTS_PTT_SRPT (Part-of-Title Search Pointer Table):
+  Title 1 → PGCN=1, PGN=1
+  Title 2 → PGCN=1, PGN=2
+  ...
+  Title N → PGCN=1, PGN=N
+
+VMG TT_SRPT (Title Search Pointer Table):
+  Title 1 → VTS=1, VTS_TTN=1
+  Title 2 → VTS=1, VTS_TTN=2
+  ...
+```
+
+**Why single PGC:** dvdnav's >>| (next chapter) command advances to the next program within the current PGC. With separate PGCs (one per title), >>| had no next program to go to and fell back to the First Play PGC, resetting to title 1. Putting all videos as programs in one PGC makes >>| navigate between videos naturally.
+
+**Navigation behavior:**
+- VLC title menu → TT_SRPT → PTT_SRPT → jumps to correct program in the single PGC
+- >>| (next chapter) → next program in same PGC → next video
+- Seek/fast-forward → VTS_VOBU_ADMAP (complete map of all VOBU sector addresses)
+- End of last program → post-command exits playback
+
+### Menu System PGC Plan (Phase 2-3)
+
+Menus use PGCs in the **menu domain**, completely separate from title playback PGCs.
+
+```
+Phase 2 — Single-channel (VTSM menus):
+  VTSM_PGCI_UT:
+    Menu PGC #1: Video select page 1
+      - Still-frame background with video thumbnails as buttons
+      - Button commands: JumpVTS_PTT to play selected video
+      - Post-playback: return to this menu
+    Menu PGC #2: Video select page 2 (if paginated)
+      - Next/Prev buttons link between menu PGCs
+
+Phase 3 — Multi-channel (VMGM + VTSM menus):
+  VMGM_PGCI_UT (Video Manager menus):
+    Menu PGC #1: Channel select (Level 1)
+      - One button per channel
+      - Button commands: JumpSS VTSM to jump to channel's VTS menu
+
+  Per-channel VTS:
+    VTSM_PGCI_UT:
+      Menu PGC #1: Video select (Level 2) for this channel
+        - Button commands: JumpVTS_TT to play video
+        - "Back" button: CallSS VMGM to return to channel select
+    VTS_PGCIT:
+      PGC #1: All videos for this channel as programs
+        - Same single-PGC-with-multiple-programs pattern
+        - Post-command: CallSS VTSM to return to video select menu
+```
+
+**Key design rules:**
+- Each YouTube channel maps to its own VTS (Video Title Set) in Phase 3
+- Each VTS has its own title playback PGC (single PGC, multiple programs) and menu PGCs
+- The VMG (Video Manager) holds the top-level channel select menu
+- Menu PGCs use `JumpSS`/`CallSS` commands (cross-domain jumps); title PGCs use `LinkPGCN`/`Exit` (within-domain)
+- Button highlights use subpicture overlays (4-color RLE bitmaps)
+
 ## GUI
 
-Cross-platform desktop GUI. Candidate frameworks:
-- **C#**: Avalonia UI (cross-platform .NET UI, mature, XAML-based)
-- **Rust**: Tauri (web-based UI with Rust backend) or egui/iced (native)
-- **Either**: could also do Electron but that's heavy
+C# with Avalonia UI 11.x. Cross-platform desktop application targeting .NET 10.
 
 ### UX Modes (Parallel Experiences)
 
 TubeBurn supports two parallel UX experiences over the same workflow engine:
 
-1. **Dashboard mode (current)**:
+1. **Dashboard mode (implemented)**:
    - Power-user surface with queue visibility, tool status, pipeline stages, and direct actions
    - Better for iterative troubleshooting and batch operations
 2. **Wizard mode (future alternate)**:
@@ -134,15 +210,18 @@ TubeBurn supports two parallel UX experiences over the same workflow engine:
 
 Both modes must remain available as alternate experiences. The wizard is not a replacement for dashboard mode.
 
-### Main Window
-- URL input area (multi-line text box or list widget)
-- "Add Playlist" button to expand a playlist URL
-- Video list showing: thumbnail, title, channel, duration, status (queued/downloading/transcoding/done)
-- Channel grouping in the list
-- Settings panel: NTSC/PAL, write speed, output folder
-- "Preview Menu" button — renders a preview of what the DVD menus will look like
-- "Build & Burn" button — kicks off the full pipeline
-- Progress panel showing current phase and per-item progress
+### Main Window (Dashboard)
+- Hero card with project summary, status indicator, and action buttons
+- Metrics display: queued videos, channels, disc usage %, authoring backend
+- Source URLs input area with Add/Import buttons
+- Video queue with inline progress bars, status, duration per item
+- Project Settings panel: NTSC/PAL, disc type (DVD-5/DVD-9), write speed, backend selection, output folder
+- Tool Paths panel with browse buttons for all external tools
+- Build Progress section with 4 pipeline stages and retry capability
+- Discovered Tools status display
+- Build and Burn button with burn toggle checkbox (build-only mode)
+- Test Output in VLC button (launches VLC with `dvd:///` protocol after authoring)
+- Recent activity log
 
 ### Wizard Window (future alternate flow)
 
@@ -163,29 +242,54 @@ Navigation rules:
 ```
 tubeburn/
   src/
-    main                 — app entry, GUI setup
-    gui/                 — UI layer (Avalonia or Tauri)
-    youtube/             — yt-dlp wrapper: download, metadata, thumbnails
-    transcode/           — ffmpeg wrapper: video conversion, menu stills
-    menu/                — menu layout engine
-      layout.rs/.cs      — compute button positions, pagination
-      render.rs/.cs      — composite backgrounds + thumbnails + text
-      highlight.rs/.cs   — generate subpicture overlay images
-    dvd/                 — DVD-Video authoring (the dvdauthor replacement)
-      ifo.rs/.cs         — IFO/BUP binary writer
-      vob.rs/.cs         — VOB muxer (MPEG-2 PS with NV_PCK)
-      pgc.rs/.cs         — PGC / cell / VOBU structures
-      commands.rs/.cs    — DVD VM navigation commands
-      udf.rs/.cs         — UDF 1.02 filesystem writer
-    burn/                — disc burning integration
-    util/                — image processing helpers, temp file management
+    TubeBurn.App/                    — Avalonia GUI (WinExe, .NET 10)
+      MainWindow.axaml/.axaml.cs     — dark-themed dashboard UI + event handlers
+      ViewModels/
+        MainWindowViewModel.cs       — full state management, pipeline orchestration
+        ObservableObject.cs          — lightweight INotifyPropertyChanged base
+      App.axaml.cs, Program.cs       — Avalonia bootstrap
+      AppLog.cs                      — file-based logging
+
+    TubeBurn.Domain/                 — core models (class library)
+      ProjectModels.cs               — VideoStandard, DiscMediaKind, ProjectSettings,
+                                       VideoSource, ChannelProject, TubeBurnProject,
+                                       ToolAvailability, MenuButtonLayout, etc.
+
+    TubeBurn.DvdAuthoring/           — native DVD authoring engine (class library)
+      NativeAuthoringPipeline.cs     — orchestrates IFO + VOB + ISO generation
+      DvdIfoWriter.cs                — binary IFO generation (VMG + VTS)
+      DvdVobMuxer.cs                 — MPEG-PS → DVD VOB with NAV packs
+      DvdPgcCompiler.cs              — PGC structure + DVD VM command generation
+      DvdCommandCodec.cs             — 8-byte DVD VM bytecode encoder
+      AuthoringContracts.cs          — IDvdAuthoringBackend interface
+      Ifo.cs, Pgc.cs, Vob.cs        — domain models for IFO/PGC/VOB structures
+
+    TubeBurn.Infrastructure/         — external tool integration (class library)
+      MediaPipelineService.cs        — yt-dlp download + ffmpeg transcode with progress
+      DiscBurnService.cs             — IMAPI2 (Windows) / growisofs (Linux) burning
+      ExternalAuthoringBridge.cs     — fallback authoring via dvdauthor + mkisofs
+      ToolDiscoveryService.cs        — scans for all external tools
+      ExternalToolPathResolver.cs    — configured path → OS defaults → PATH lookup
+      ProjectFileService.cs          — project JSON save/load
+      AuthoringBackendSelector.cs    — NativePort vs ExternalBridge selection
+
+  tests/
+    TubeBurn.Tests/                  — xunit + Avalonia.Headless.XUnit (.NET 10)
+      AuthoringPipelineTests.cs      — IFO/VOB/pipeline unit tests
+      DvdAuthoringIntegrationTests.cs — NAV pack, VOBU, IFO structure, full pipeline
+      UiAutomationTests.cs           — headless Avalonia UI tests
+      Fixtures/                      — sample projects, golden snapshots, test media
+
+    TubeBurn.DesktopUiTests/         — FlaUI smoke tests (net8.0-windows, opt-in)
+      DesktopWorkflowSmokeTests.cs   — end-to-end UI automation
+
   reference/
-    dvdauthor/           — original dvdauthor source used as porting reference
+    dvdauthor/                       — original dvdauthor source (porting reference)
 ```
 
 ### UI Architecture Guardrails
 
-- Keep business/workflow logic in service layer (`domain`, `infrastructure`, `dvd`) and out of UI code-behind where possible
+- Keep business/workflow logic in service layer (`Domain`, `Infrastructure`, `DvdAuthoring`) and out of UI code-behind where possible
 - Dashboard and Wizard UIs must call the same use-case services for:
   - queue mutations
   - project save/load
@@ -208,26 +312,30 @@ This contract enables preserving behavior while redesigning UI experiences later
 ### Key Internal Data Structures
 
 ```
-Project
-  ├── settings: { standard: NTSC|PAL, writeSpeed: int }
-  ├── channels: Channel[]
+TubeBurnProject
+  ├── settings: ProjectSettings
+  │     ├── standard: NTSC | PAL
+  │     ├── mediaKind: Dvd5 | Dvd9
+  │     ├── writeSpeed: int
+  │     ├── outputDirectory: string
+  │     └── tool paths: yt-dlp, ffmpeg, dvdauthor, mkisofs, growisofs, ImgBurn, vlc
+  ├── channels: ChannelProject[]
   │     ├── name: string
-  │     ├── bannerImage: path
-  │     ├── avatarImage: path
-  │     └── videos: Video[]
+  │     ├── bannerImagePath: path
+  │     ├── avatarImagePath: path
+  │     └── videos: VideoSource[]
   │           ├── url: string
   │           ├── title: string
-  │           ├── thumbnail: path
   │           ├── duration: TimeSpan
   │           ├── sourcePath: path      (downloaded file)
-  │           └── transcodedPath: path  (DVD-ready .mpg)
-  └── dvdLayout: DVDLayout
+  │           ├── transcodedPath: path  (DVD-ready .mpg)
+  │           └── estimatedSizeBytes: long
+  └── (future) dvdLayout: DVDLayout
         ├── vmgmMenus: Menu[]           (Level 1)
-        ├── titlesets: Titleset[]
-        │     ├── channel: Channel
-        │     ├── menus: Menu[]         (Level 2 pages)
-        │     └── titles: Title[]       (one per video)
-        └── totalSizeBytes: long
+        └── titlesets: Titleset[]
+              ├── channel: ChannelProject
+              ├── menus: Menu[]         (Level 2 pages)
+              └── titles: Title[]       (one per video)
 ```
 
 ## DVD-Video Format Reference
@@ -236,121 +344,90 @@ Key specs the authoring engine must implement:
 
 - **VOB**: MPEG-2 Program Stream. Max 1GB per file (split as VTS_xx_1.VOB through VTS_xx_9.VOB). Contains video, audio, subpicture, and navigation (NV_PCK) packets.
 - **VOBU**: Video Object Unit. A group of one or more GOPs, starting with a NV_PCK. Typically 0.4-1.0 seconds. The NV_PCK contains forward/backward pointers for navigation.
-- **IFO**: Binary file containing PGC tables, cell playback info, VOBU address maps. Little-endian. Well-documented structure.
-- **PGC**: Program Chain. Defines playback sequence: pre-commands, cell list, post-commands. Menus and titles are both PGCs.
+- **IFO**: Binary file containing PGC tables, cell playback info, VOBU address maps. **Big-endian** multi-byte integers per DVD spec.
+- **PGC**: Program Chain. Defines playback sequence: pre-commands, cell list, post-commands. Menus and titles are both PGCs but live in separate domains.
 - **Subpicture**: Bitmap overlays for button highlights. RLE-compressed, 4-color palette. Defines button coordinates and auto-action/select/activate color schemes.
 - **DVD VM Commands**: 8-byte bytecode instructions for navigation (jump, link, set GPRM/SPRM registers). Used in PGC pre/post commands and button commands.
-- **UDF 1.02**: The filesystem. Must be UDF 1.02 (not newer) for player compatibility. ISO9660 bridge for additional compatibility.
+- **UDF 1.02**: The filesystem. Must be UDF 1.02 (not newer) for player compatibility. ISO9660 bridge for additional compatibility. Currently generated via IMAPI2 COM on Windows.
 
 ## dvdauthor Porting Strategy
 
 - The `reference/dvdauthor` source is the canonical behavior reference for DVD authoring logic
-- Target: implement equivalent behavior in TubeBurn-native C# or Rust code (no runtime dependency on dvdauthor in final architecture)
+- Target: implement equivalent behavior in TubeBurn-native C# code (no runtime dependency on dvdauthor)
 - Prefer module-by-module parity rather than line-by-line translation:
-  - IFO writer parity
-  - PGC/cell/navigation command parity
-  - VOB/NV_PCK placement and indexing parity
-  - Menu/subpicture behavior parity
-- Keep a temporary compatibility path during development:
-  - Ported implementation and external-authoring path can coexist behind a feature flag or runtime setting
-  - New builds should support A/B validation against reference outputs
+  - IFO writer parity — **implemented** (`DvdIfoWriter`)
+  - VOB/NV_PCK placement and indexing parity — **implemented** (`DvdVobMuxer`)
+  - PGC/cell/navigation command parity — **implemented** (`DvdPgcCompiler`, `DvdCommandCodec`)
+  - Menu/subpicture behavior parity — **not yet started**
+- External authoring bridge (`ExternalAuthoringBridge`) available as fallback
 - Define parity validation artifacts:
   - Byte-level checks where deterministic output is expected (headers/tables/offset maps)
   - Structural checks for valid playback/navigation on software and hardware players
   - Golden sample projects covering single titleset, multi-titleset, and menu-heavy discs
 
-### Source-to-Module Mapping (Initial)
+### Source-to-Module Mapping
 
-- `reference/dvdauthor/src/dvdifo.c` -> `src/dvd/ifo.rs` or `src/dvd/ifo.cs` (IFO/BUP structures and serializers)
-- `reference/dvdauthor/src/dvdpgc.c` -> `src/dvd/pgc.rs` or `src/dvd/pgc.cs` (PGC, cell playback, command tables)
-- `reference/dvdauthor/src/dvdvob.c` -> `src/dvd/vob.rs` or `src/dvd/vob.cs` (VOB packetization, splits, NV_PCK placement)
-- `reference/dvdauthor/src/dvdcompile.c` + `reference/dvdauthor/src/dvduncompile.c` -> `src/dvd/compiler.rs` or `src/dvd/compiler.cs` (internal compile/decompile utilities and validation helpers)
-- `reference/dvdauthor/src/dvdvm.h` + `reference/dvdauthor/src/dvdvmy.c` + `reference/dvdauthor/src/dvdvml.c` -> `src/dvd/commands.rs` or `src/dvd/commands.cs` (DVD VM command model, parser, and encoder)
-- `reference/dvdauthor/src/readxml.c` + `reference/dvdauthor/src/conffile.c` -> `src/dvd/project_parser.rs` or `src/dvd/project_parser.cs` (project/menu authoring input parser)
-- `reference/dvdauthor/src/subgen*.c` + `reference/dvdauthor/src/subrender.c` + `reference/dvdauthor/src/subreader.c` -> `src/menu/highlight.rs` or `src/menu/highlight.cs` (subpicture generation/rendering pipeline)
-- `reference/dvdauthor/src/dvdauthor.c` + `reference/dvdauthor/src/dvdcli.c` -> `src/dvd/pipeline.rs` or `src/dvd/pipeline.cs` (pipeline orchestration; CLI-specific behavior adapted to GUI workflow)
-
-### Suggested Port Order
-
-1. Parse/normalize authoring input model (`project_parser`)
-2. Implement IFO/PGC writers (`ifo`, `pgc`)
-3. Implement VOB mux + navigation packet path (`vob`)
-4. Implement DVD VM command encode/decode (`commands`)
-5. Implement subpicture/highlight generation (`menu/highlight`)
-6. Integrate compile pipeline (`pipeline`) and run parity tests against golden projects
-
-## Language Considerations
-
-### C# (with Avalonia UI)
-- Pros: rich ecosystem, excellent binary I/O (BinaryWriter, Span<byte>), Avalonia is mature cross-platform UI, async/await for pipeline stages, SkiaSharp for image compositing
-- Cons: .NET runtime dependency (but self-contained publish solves this)
-
-### Rust (with Tauri or egui)
-- Pros: no runtime dependency, excellent performance, strong type system for binary format work, Tauri gives web-based UI flexibility
-- Cons: steeper learning curve, image/text rendering libraries less batteries-included than .NET
-
-### Hybrid approach
-- Rust core library for DVD authoring (the performance-sensitive binary work)
-- C# Avalonia GUI that calls the Rust library via FFI/P-Invoke
-- Best of both worlds but more build complexity
+| dvdauthor source | TubeBurn module | Status |
+|---|---|---|
+| `dvdifo.c` | `DvdIfoWriter.cs` | Implemented |
+| `dvdpgc.c` | `DvdPgcCompiler.cs` | Implemented (basic) |
+| `dvdvob.c` | `DvdVobMuxer.cs` | Implemented |
+| `dvdcompile.c` + `dvdvm.h` | `DvdCommandCodec.cs` | Implemented (core commands) |
+| `subgen*.c` + `subrender.c` | `MenuHighlightPlanner` (stub) | Phase 2 |
+| `dvdauthor.c` | `NativeAuthoringPipeline.cs` | Implemented |
 
 ## External Dependencies
 
-- **yt-dlp**: video/metadata download (invoked as subprocess)
-- **ffmpeg**: transcoding to MPEG-2, generating menu still-frame streams (invoked as subprocess)
-- Neither needs to be ported — they're called as external processes with progress parsing
+| Tool | Purpose | Discovery |
+|---|---|---|
+| **yt-dlp** | Video/metadata download | PATH or configured |
+| **ffmpeg** | Transcode to MPEG-2 | PATH or configured |
+| **dvdauthor** | External authoring fallback | PATH or configured |
+| **mkisofs** | ISO creation (external bridge) | PATH or configured |
+| **growisofs** | Linux disc burning | PATH or configured |
+| **ImgBurn** | Windows burn fallback (opt-in) | `C:\Program Files (x86)\ImgBurn\ImgBurn.exe` |
+| **vlc** | Test output playback | `C:\Program Files\VideoLAN\VLC\vlc.exe` or PATH |
 
-## MVP Scope
+Tool discovery: `ExternalToolPathResolver` checks configured path → OS default locations → system PATH. Results shown in GUI Tool Paths panel with browse overrides.
 
-Phase 1 — get a working disc with auto-play (no menus):
-1. GUI: paste URLs, download, transcode, burn
-2. Single titleset, videos play sequentially
-3. Native-first authoring generates VIDEO_TS + ISO in-app; external bridge is optional recovery
-4. Burn uses platform-native backend first (IMAPI2 on Windows), with explicit opt-in fallback tooling
+## Phases
 
-Phase 1 implementation wrap-up (current):
-1. Dashboard UX and workflow plumbing are implemented: URL queue, save/load, tool discovery, and one-click build orchestration
-2. Live transcode progress is implemented from ffmpeg progress events (`out_time_ms`/`out_time`) and reflected in queue + overall progress
-3. Native authoring path now emits concrete `VIDEO_TS` + `tubeburn.iso` artifacts and returns `Succeeded` (not `Planned`)
-4. Burn stage now runs as a strict required stage: Windows native IMAPI2 path first, then optional ImgBurn fallback only when explicitly enabled (`TB_ALLOW_IMGBURN_FALLBACK=1`)
-5. Over-capacity blocking is enforced before build starts, with a clear size vs. media-capacity message
-6. Stage semantics are strict (`Done` means complete, `Blocked` means upstream failed) and failures are surfaced directly in UI with stage/item/reason details
+### Phase 1 — Working disc with auto-play, no menus (current)
+1. Dashboard UX: URL queue, save/load, tool discovery, one-click build orchestration
+2. Single VTS, all videos as programs in one PGC, sequential playback
+3. Native authoring generates VIDEO_TS + ISO; external bridge available as fallback
+4. Burn via IMAPI2 (Windows) or growisofs (Linux); ImgBurn opt-in fallback
+5. Over-capacity blocking, strict stage semantics, failure details in UI
+6. Build-only mode (burn toggle), VLC test output button
 
-Phase 2 — add menu system:
-1. Level 2 menus (video select within a single channel)
-2. Still-image backgrounds with thumbnail buttons
-3. Button highlight subpictures
+### Phase 2 — Single-channel menu system
+1. Level 2 menus: video select within a single channel (VTSM menu PGCs)
+2. Still-image backgrounds with video thumbnail buttons
+3. Button highlight subpictures (4-color RLE)
+4. Post-playback return to menu via `CallSS VTSM` command
+5. Menu preview in GUI
 
-Phase 3 — multi-channel:
-1. Level 1 menu (channel select)
-2. Multiple titlesets
-3. Pagination for channels with many videos
+### Phase 3 — Multi-channel
+1. Level 1 menu: channel select (VMGM menu PGC)
+2. Each channel becomes its own VTS with separate menu PGCs and title PGC
+3. Pagination for channels with many videos (multiple menu PGCs per channel)
+4. `JumpSS`/`CallSS` navigation between VMGM and VTSM domains
 
-Phase 4 — polish:
-1. Menu preview in GUI
-2. Animated menu backgrounds (short video loops)
-3. Custom themes/templates
-4. Chapter markers (split long videos into chapters)
-5. DVD-9 (dual layer) support
+### Phase 4 — Polish
+1. Animated menu backgrounds (short video loops)
+2. Custom themes/templates
+3. Chapter markers (split long videos into chapters within a program)
+4. DVD-9 (dual layer) support
 
-Phase 5 — native authoring parity:
-1. Replace external authoring path with TubeBurn-native authoring by default
-2. Reach parity with `reference/dvdauthor` behavior on golden sample projects
-3. Keep fallback path only for debugging/regression triage
-
-## MVP Non-Goals
-
-- Writing full custom IFO/VOB/NV_PCK structures before first usable build
-- Animated menu backgrounds
-- Theme/template editor
-- Chapter marker authoring
-- DVD-9 support
-- Full dvdauthor behavior parity in Phase 1
+### Phase 5 — Native authoring parity
+1. Native authoring as default backend (external bridge for debugging only)
+2. Full parity with `reference/dvdauthor` on golden sample projects
+3. Native UDF 1.02 filesystem writer (replace IMAPI2 dependency)
 
 ## Acceptance Criteria (MVP Phase 1)
 
 - Given one or more valid URLs, TubeBurn downloads inputs, transcodes them, authors VIDEO_TS, and burns a playable disc without manual command-line steps
-- Resulting disc auto-plays on at least one software DVD player and one standalone DVD player test target
+- Resulting disc plays on VLC (via dvd:// protocol) with working title selection, seeking, and next/previous chapter navigation
 - If estimated size exceeds selected media capacity, Build & Burn is blocked with a clear over-capacity message
 - If burn backend setup is incomplete, the app shows a specific install/config action instead of skipping or failing silently
 - On any pipeline failure, the app shows failed stage, failed item (when known), concise reason, and immediate recovery guidance
@@ -364,11 +441,16 @@ Validate implemented features through UX interaction paths and verify plumbing s
 
 ### Layers
 
-1. **Headless Avalonia UX tests**:
+1. **Headless Avalonia UX tests** (TubeBurn.Tests):
    - Fast in-process tests for button-driven workflows and view-model side effects
-2. **Desktop smoke automation (Windows)**:
-   - Real app automation for launch, clicks, text entry, and filesystem side effects
-   - Optional/opt-in for local environments where desktop automation is available
+2. **DVD authoring integration tests** (TubeBurn.Tests):
+   - VOB muxing: NAV pack detection, LBN correctness, PTS monotonicity, VOBU sizing
+   - IFO structure: PGC fields, cell sectors, playback times, VOBU_ADMAP completeness
+   - Full pipeline: produces valid VIDEO_TS + ISO from test fixtures
+   - Optional VLC dvdnav validation (headless, checks for IFO parse errors)
+3. **Desktop smoke automation** (TubeBurn.DesktopUiTests, Windows):
+   - Real app automation via FlaUI for launch, clicks, text entry, and filesystem side effects
+   - Optional/opt-in (`TB_RUN_DESKTOP_UI_TESTS=1`)
 
 ### Required UX-driven checks (MVP)
 

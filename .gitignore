@@ -15,6 +15,9 @@ TestResults/
 # Claude Code local settings
 .claude/
 
+# Test dependencies (local VLC installation for DVD validation tests)
+tests/lib/
+
 # OS files
 Thumbs.db
 Desktop.ini

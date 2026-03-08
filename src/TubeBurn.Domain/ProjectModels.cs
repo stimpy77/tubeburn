@@ -26,6 +26,7 @@ public sealed record ProjectSettings(
     string? IsoBuilderToolPath = null,
     string? GrowisofsToolPath = null,
     string? ImgBurnToolPath = null,
+    string? VlcToolPath = null,
     string? BurnDevice = null);
 
 public sealed record VideoSource(

@@ -16,6 +16,7 @@ public sealed class ToolDiscoveryService
             DiscoverTool("mkisofs", settings.IsoBuilderToolPath),
             DiscoverTool("growisofs", settings.GrowisofsToolPath),
             DiscoverTool("ImgBurn", settings.ImgBurnToolPath),
+            DiscoverTool("vlc", settings.VlcToolPath),
         ];
     }
 

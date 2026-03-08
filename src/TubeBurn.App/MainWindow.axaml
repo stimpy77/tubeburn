@@ -127,7 +127,9 @@
                                 </Border>
                             </WrapPanel>
                             <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
-                                <Button x:Name="BuildAndBurnButton" Classes="primary" Click="OnBuildAndBurnClick" Content="Build and Burn" />
+                                <Button x:Name="BuildAndBurnButton" Classes="primary" Click="OnBuildAndBurnClick"
+                                        Content="{Binding BurnEnabled, Converter={x:Static viewModels:BurnButtonLabelConverter.Instance}}" />
+                                <CheckBox IsChecked="{Binding BurnEnabled}" Content="Burn to disc" VerticalAlignment="Center" />
                                 <Button x:Name="DiscoverToolsButton" Classes="secondary" Click="OnDiscoverToolsClick" Content="Discover Tools" />
                                 <Button x:Name="SaveProjectButton" Classes="secondary" Click="OnSaveProjectClick" Content="Save Project" />
                                 <Button x:Name="LoadProjectButton" Classes="secondary" Click="OnLoadProjectClick" Content="Load Project" />
@@ -275,7 +277,7 @@
                                 <TextBlock Classes="sectionTitle" Text="Tool Paths (Optional Override)" />
                                 <TextBlock Classes="muted" Text="If a tool is missing, browse to its executable. TubeBurn also checks OS default install paths first." TextWrapping="Wrap" />
 
-                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
                                     <TextBlock Grid.Row="0" VerticalAlignment="Center" Text="yt-dlp" />
                                     <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding YtDlpToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
                                     <Button x:Name="BrowseYtDlpToolButton" Grid.Row="0" Grid.Column="2" Classes="secondary" Tag="yt-dlp" Click="OnBrowseToolPathClick" Content="Browse" />
@@ -299,6 +301,10 @@
                                     <TextBlock Grid.Row="5" VerticalAlignment="Center" Text="ImgBurn" />
                                     <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ImgBurnToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
                                     <Button x:Name="BrowseImgBurnToolButton" Grid.Row="5" Grid.Column="2" Classes="secondary" Tag="ImgBurn" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="6" VerticalAlignment="Center" Text="vlc" />
+                                    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding VlcToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseVlcToolButton" Grid.Row="6" Grid.Column="2" Classes="secondary" Tag="vlc" Click="OnBrowseToolPathClick" Content="Browse" />
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -329,6 +335,11 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                <Button x:Name="TestOutputButton"
+                                        Classes="secondary" Padding="12,6"
+                                        Content="Test Output in VLC"
+                                        IsVisible="{Binding IsTestOutputAvailable}"
+                                        Click="OnTestOutputClick" />
                                 <Border Classes="queueItem">
                                     <StackPanel Spacing="6">
                                         <TextBlock FontWeight="SemiBold" Text="Failure detail" />

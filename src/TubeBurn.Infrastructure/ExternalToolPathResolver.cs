@@ -65,6 +65,7 @@ public static class ExternalToolPathResolver
                 "dvdauthor" => [@"C:\Program Files\dvdauthor\dvdauthor.exe", @"C:\Program Files (x86)\dvdauthor\dvdauthor.exe"],
                 "mkisofs" => [@"C:\Program Files\cdrtools\mkisofs.exe", @"C:\Program Files (x86)\cdrtools\mkisofs.exe"],
                 "growisofs" => [@"C:\Program Files\cdrtools\growisofs.exe", @"C:\Program Files (x86)\cdrtools\growisofs.exe"],
+                "vlc" => [@"C:\Program Files\VideoLAN\VLC\vlc.exe", @"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe"],
                 _ => [],
             };
         }
@@ -78,6 +79,7 @@ public static class ExternalToolPathResolver
                 "dvdauthor" => ["/opt/homebrew/bin/dvdauthor", "/usr/local/bin/dvdauthor", "/usr/bin/dvdauthor"],
                 "mkisofs" => ["/opt/homebrew/bin/mkisofs", "/usr/local/bin/mkisofs", "/usr/bin/mkisofs"],
                 "growisofs" => ["/opt/homebrew/bin/growisofs", "/usr/local/bin/growisofs", "/usr/bin/growisofs"],
+                "vlc" => ["/Applications/VLC.app/Contents/MacOS/VLC", "/opt/homebrew/bin/vlc", "/usr/local/bin/vlc", "/usr/bin/vlc"],
                 "ImgBurn" => [],
                 _ => [],
             };
@@ -90,6 +92,7 @@ public static class ExternalToolPathResolver
             "dvdauthor" => ["/usr/bin/dvdauthor", "/usr/local/bin/dvdauthor"],
             "mkisofs" => ["/usr/bin/mkisofs", "/usr/local/bin/mkisofs", "/usr/bin/genisoimage"],
             "growisofs" => ["/usr/bin/growisofs", "/usr/local/bin/growisofs"],
+            "vlc" => ["/usr/bin/vlc", "/usr/local/bin/vlc", "/snap/bin/vlc"],
             "ImgBurn" => [],
             _ => [],
         };

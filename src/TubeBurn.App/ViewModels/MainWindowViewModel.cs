@@ -33,7 +33,10 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _mkisofsToolPath = string.Empty;
     private string _growisofsToolPath = string.Empty;
     private string _imgBurnToolPath = string.Empty;
+    private string _vlcToolPath = string.Empty;
     private string _selectedBurnDrive = AutoBurnDriveLabel;
+    private bool _burnEnabled = true;
+    private string _lastAuthoredWorkingDirectory = string.Empty;
     private string _lastFailureDetail = string.Empty;
     private string _logFilePath = string.Empty;
     private double _overallProgress;
@@ -181,6 +184,32 @@ public sealed class MainWindowViewModel : ObservableObject
         set => SetProperty(ref _imgBurnToolPath, value);
     }
 
+    public string VlcToolPath
+    {
+        get => _vlcToolPath;
+        set => SetProperty(ref _vlcToolPath, value);
+    }
+
+    public bool BurnEnabled
+    {
+        get => _burnEnabled;
+        set => SetProperty(ref _burnEnabled, value);
+    }
+
+    public string LastAuthoredWorkingDirectory
+    {
+        get => _lastAuthoredWorkingDirectory;
+        set
+        {
+            if (SetProperty(ref _lastAuthoredWorkingDirectory, value))
+            {
+                OnPropertyChanged(nameof(IsTestOutputAvailable));
+            }
+        }
+    }
+
+    public bool IsTestOutputAvailable => !string.IsNullOrEmpty(LastAuthoredWorkingDirectory);
+
     public string SelectedBurnDrive
     {
         get => _selectedBurnDrive;
@@ -327,6 +356,7 @@ public sealed class MainWindowViewModel : ObservableObject
         MkisofsToolPath = project.Settings.IsoBuilderToolPath ?? string.Empty;
         GrowisofsToolPath = project.Settings.GrowisofsToolPath ?? string.Empty;
         ImgBurnToolPath = project.Settings.ImgBurnToolPath ?? string.Empty;
+        VlcToolPath = project.Settings.VlcToolPath ?? string.Empty;
         SelectedBurnDrive = string.IsNullOrWhiteSpace(project.Settings.BurnDevice)
             ? AutoBurnDriveLabel
             : project.Settings.BurnDevice;
@@ -384,6 +414,7 @@ public sealed class MainWindowViewModel : ObservableObject
             IsoBuilderToolPath: NormalizeToolPath(MkisofsToolPath),
             GrowisofsToolPath: NormalizeToolPath(GrowisofsToolPath),
             ImgBurnToolPath: NormalizeToolPath(ImgBurnToolPath),
+            VlcToolPath: NormalizeToolPath(VlcToolPath),
             BurnDevice: NormalizeBurnDevice(SelectedBurnDrive));
 
         var channels = Queue
@@ -545,6 +576,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
         if (result.Status == AuthoringResultStatus.Succeeded)
         {
+            LastAuthoredWorkingDirectory = workingDirectory;
             BuildStatus = "Authoring completed. Preparing burn stage.";
             CurrentStage = "Author";
             OverallProgress = 90;
@@ -730,6 +762,9 @@ public sealed class MainWindowViewModel : ObservableObject
             case "ImgBurn":
                 ImgBurnToolPath = path;
                 break;
+            case "vlc":
+                VlcToolPath = path;
+                break;
             default:
                 return;
         }
@@ -849,7 +884,7 @@ public sealed class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(ProjectSummary));
     }
 
-    private void AddRecentActivity(string message)
+    public void AddRecentActivity(string message)
     {
         if (string.IsNullOrWhiteSpace(message))
         {
@@ -1163,4 +1198,15 @@ public sealed class ToolStatusItem : ObservableObject
     public string Detail { get; }
 
     public IBrush AccentBrush { get; }
+}
+
+public sealed class BurnButtonLabelConverter : Avalonia.Data.Converters.IValueConverter
+{
+    public static readonly BurnButtonLabelConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => value is true ? "Build and Burn" : "Build Only";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
 }

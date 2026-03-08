@@ -28,12 +28,6 @@ public static class DvdVobMuxer
     private const byte MPID_PRIVATE2 = 0xBF;
     private const byte MPID_VIDEO_FIRST = 0xE0;
 
-    // NAV pack absolute byte offsets within the 2048-byte sector.
-    private const int PCI_PES = 0x26;
-    private const int PCI_DATA = 0x2D;
-    private const int DSI_PES = 0x400;
-    private const int DSI_DATA = 0x407;
-
     // Forward/backward skip timeline in half-seconds (dvdauthor convention).
     private static readonly int[] Timeline =
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 60, 120, 240];
@@ -61,20 +55,16 @@ public static class DvdVobMuxer
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceMpegPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputVobPath);
 
-        // Pass 1: Scan for VOBU boundaries by streaming through the file.
+        // Pass 1: Scan for VOBU boundaries by detecting source NAV packs.
         var vobus = await ScanVobusAsync(sourceMpegPath, standard, cancellationToken);
         if (vobus.Count == 0)
         {
-            // Fallback: treat entire file as one VOBU.
+            // Fallback: treat entire file as one VOBU (non-DVD source).
             var fileLength = new FileInfo(sourceMpegPath).Length;
             var scr = await ReadScrFromFileAsync(sourceMpegPath, 4, cancellationToken);
             var frameDur = standard == VideoStandard.Ntsc ? 3003L : 3600L;
             vobus.Add(new VobuScan(0, fileLength, scr, scr + frameDur, true));
         }
-
-        // Set end PTS for each VOBU from the next VOBU's start PTS.
-        for (var i = 0; i < vobus.Count - 1; i++)
-            vobus[i] = vobus[i] with { EndPts = vobus[i + 1].StartPts };
 
         // Calculate output sector layout.  Offsets are global (startSector-based)
         // so that NAV pack LBN fields are correct in the concatenated VOB space.
@@ -115,13 +105,22 @@ public static class DvdVobMuxer
             totalBytesWritten += SectorSize;
 
             // Copy source data for this VOBU from source stream.
+            // Neutralize any existing private_stream_2 (0xBF) packs in the source
+            // by rewriting their stream ID to padding_stream (0xBE).  The source
+            // MPEG-PS from ffmpeg -target dvd contains private_stream_2 packets
+            // that look like NAV packs; if copied verbatim, DVD players see them
+            // as stale NAV packs with wrong LBN/sector pointers and break seeking.
+            // We read in sector-aligned chunks (2048 bytes) so that start codes
+            // never straddle a read boundary.
             sourceStream.Position = vobu.StartOffset;
             var remaining = dataBytes;
+            const int sectorAlignedChunk = SectorSize * 40; // 80KB, sector-aligned
             while (remaining > 0)
             {
-                var toRead = (int)Math.Min(remaining, copyBuf.Length);
+                var toRead = (int)Math.Min(remaining, sectorAlignedChunk);
                 var bytesRead = await sourceStream.ReadAsync(copyBuf.AsMemory(0, toRead), cancellationToken);
                 if (bytesRead == 0) break;
+                NeutralizePrivateStream2(copyBuf.AsSpan(0, bytesRead));
                 await outputStream.WriteAsync(copyBuf.AsMemory(0, bytesRead), cancellationToken);
                 remaining -= bytesRead;
                 totalBytesWritten += bytesRead;
@@ -151,98 +150,116 @@ public static class DvdVobMuxer
     }
 
     /// <summary>
-    /// Scans an MPEG-PS file by streaming to find VOBU boundaries (GOP start codes).
-    /// Uses a sliding window so only a small buffer is in memory at any time.
+    /// Scans an MPEG-PS file for VOBU boundaries by detecting source NAV packs,
+    /// matching dvdauthor's approach (dvdvob.c:1451-1468).  ffmpeg -target dvd
+    /// emits a NAV pack (pack header + system header + two private_stream_2 PES
+    /// packets) at every GOP boundary, so these positions are the correct VOBU
+    /// boundaries.  The source NAV pack sector is excluded from each VOBU's data
+    /// range and replaced by our own NAV pack in the output pass.
     /// </summary>
     private static async Task<List<VobuScan>> ScanVobusAsync(
         string path, VideoStandard standard, CancellationToken cancellationToken)
     {
         var vobus = new List<VobuScan>();
-        var packStarts = new List<long>();
-        var packScrs = new List<long>();
-        var packIsGop = new List<bool>();
-        var packHasVideo = new List<bool>();
 
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
         var fileLength = stream.Length;
 
-        // Scan for pack headers and classify each pack.
-        // We read in large chunks with overlap to avoid missing start codes at boundaries.
-        const int chunkSize = 1024 * 1024; // 1 MB
-        const int overlap = 2048;           // enough for a full pack scan
-        var buf = new byte[chunkSize + overlap];
+        // Read in 1 MB chunks, process in 2048-byte sectors.
+        // ffmpeg -target dvd produces sector-aligned 2048-byte packs.
+        const int chunkSectors = 512; // 512 × 2048 = 1 MB
+        const int chunkSize = chunkSectors * SectorSize;
+        var buf = new byte[chunkSize];
         long fileOffset = 0;
+        long lastScr = 0;
 
         while (fileOffset < fileLength)
         {
             cancellationToken.ThrowIfCancellationRequested();
             stream.Position = fileOffset;
             var bytesRead = await stream.ReadAsync(buf, cancellationToken);
-            if (bytesRead < 14) break;
+            if (bytesRead < SectorSize) break;
 
-            var scanLimit = (fileOffset + bytesRead >= fileLength)
-                ? bytesRead - 3  // at end of file, scan to the end
-                : bytesRead - overlap; // leave overlap for next chunk
-
-            for (var i = 0; i < scanLimit; i++)
+            var sectorsInChunk = bytesRead / SectorSize;
+            for (var s = 0; s < sectorsInChunk; s++)
             {
-                if (buf[i] == 0x00 && buf[i + 1] == 0x00 && buf[i + 2] == 0x01 && buf[i + 3] == MPID_PACK)
+                var off = s * SectorSize;
+
+                // Track last SCR seen (for final VOBU EndPts).
+                if (buf[off] == 0x00 && buf[off + 1] == 0x00 &&
+                    buf[off + 2] == 0x01 && buf[off + 3] == MPID_PACK &&
+                    off + 9 <= bytesRead)
                 {
-                    var absPos = fileOffset + i;
-                    // Avoid adding the same pack twice from the overlap region.
-                    if (packStarts.Count > 0 && absPos <= packStarts[^1])
-                        continue;
+                    lastScr = ReadScr(buf, off + 4);
+                }
 
-                    var scr = (i + 9 <= bytesRead) ? ReadScr(buf, i + 4) : 0L;
-                    packStarts.Add(absPos);
-                    packScrs.Add(scr);
+                if (IsNavPack(buf, off))
+                {
+                    var scr = ReadScr(buf, off + 4);
+                    var navAbsOffset = fileOffset + off;
 
-                    // Determine pack end for classification (next pack or chunk boundary).
-                    var packEnd = bytesRead; // default to end of buffer
-                    for (var j = i + 14; j < bytesRead - 3; j++)
-                    {
-                        if (buf[j] == 0x00 && buf[j + 1] == 0x00 && buf[j + 2] == 0x01 && buf[j + 3] == MPID_PACK)
-                        {
-                            packEnd = j;
-                            break;
-                        }
-                    }
+                    // Close previous VOBU's byte range.
+                    if (vobus.Count > 0)
+                        vobus[^1] = vobus[^1] with { EndOffset = navAbsOffset };
 
-                    packIsGop.Add(ContainsGopStart(buf, i, packEnd));
-                    packHasVideo.Add(ContainsVideoStream(buf, i, packEnd));
+                    // New VOBU: source data starts after the NAV pack sector.
+                    vobus.Add(new VobuScan(
+                        StartOffset: navAbsOffset + SectorSize,
+                        EndOffset: fileLength,
+                        StartPts: scr,
+                        EndPts: scr,
+                        HasVideo: true));
                 }
             }
 
-            fileOffset += scanLimit;
+            fileOffset += (long)sectorsInChunk * SectorSize;
         }
 
-        if (packStarts.Count == 0)
-            return vobus;
+        // Set EndPts from next VOBU's StartPts.
+        for (var i = 0; i < vobus.Count - 1; i++)
+            vobus[i] = vobus[i] with { EndPts = vobus[i + 1].StartPts };
 
-        // Build VOBUs from classified packs.
-        var currentVobuStart = 0L;
-        var hasVideo = false;
-        var lastGopScr = packScrs[0];
-
-        for (var p = 0; p < packStarts.Count; p++)
+        // Last VOBU: use last SCR seen + one frame duration.
+        if (vobus.Count > 0)
         {
-            if (packIsGop[p] && p > 0)
-            {
-                vobus.Add(new VobuScan(currentVobuStart, packStarts[p], lastGopScr, packScrs[p], hasVideo));
-                currentVobuStart = packStarts[p];
-                lastGopScr = packScrs[p];
-                hasVideo = false;
-            }
-
-            if (packHasVideo[p])
-                hasVideo = true;
+            var frameDuration = standard == VideoStandard.Ntsc ? 3003L : 3600L;
+            vobus[^1] = vobus[^1] with { EndPts = lastScr + frameDuration };
         }
-
-        // Close final VOBU.
-        var frameDuration = standard == VideoStandard.Ntsc ? 3003L : 3600L;
-        vobus.Add(new VobuScan(currentVobuStart, fileLength, lastGopScr, packScrs[^1] + frameDuration, hasVideo));
 
         return vobus;
+    }
+
+    /// <summary>
+    /// Detects a NAV pack at the given offset within buf, matching dvdauthor's
+    /// detection pattern: pack header + system header + two private_stream_2 PES
+    /// packets at fixed offsets within a 2048-byte sector.
+    /// </summary>
+    private static bool IsNavPack(byte[] buf, int offset)
+    {
+        if (offset + SectorSize > buf.Length)
+            return false;
+
+        // Pack header: 00 00 01 BA
+        if (buf[offset] != 0x00 || buf[offset + 1] != 0x00 ||
+            buf[offset + 2] != 0x01 || buf[offset + 3] != MPID_PACK)
+            return false;
+
+        // System header: 00 00 01 BB at byte 14
+        if (buf[offset + 14] != 0x00 || buf[offset + 15] != 0x00 ||
+            buf[offset + 16] != 0x01 || buf[offset + 17] != MPID_SYSTEM)
+            return false;
+
+        // First private_stream_2 (PCI): 00 00 01 BF at byte 38
+        if (buf[offset + 38] != 0x00 || buf[offset + 39] != 0x00 ||
+            buf[offset + 40] != 0x01 || buf[offset + 41] != MPID_PRIVATE2)
+            return false;
+
+        // Second private_stream_2 (DSI): 00 00 01 BF at byte 1024
+        if (buf[offset + 1024] != 0x00 || buf[offset + 1025] != 0x00 ||
+            buf[offset + 1026] != 0x01 || buf[offset + 1027] != MPID_PRIVATE2)
+            return false;
+
+        return true;
     }
 
     private static async Task<long> ReadScrFromFileAsync(string path, long offset, CancellationToken cancellationToken)
@@ -254,70 +271,6 @@ public static class DvdVobMuxer
         return bytesRead >= 5 ? ReadScr(buf, 0) : 0;
     }
 
-    private static bool ContainsGopStart(byte[] data, int packPos, int endPos)
-    {
-        var pos = packPos + 14;
-
-        // Skip system header if present.
-        if (pos + 4 <= endPos && data[pos] == 0x00 && data[pos + 1] == 0x00 &&
-            data[pos + 2] == 0x01 && data[pos + 3] == MPID_SYSTEM)
-        {
-            if (pos + 6 <= endPos)
-            {
-                var sysLen = (data[pos + 4] << 8) | data[pos + 5];
-                pos += 6 + sysLen;
-            }
-        }
-
-        if (pos + 4 > endPos)
-            return false;
-
-        if (data[pos] != 0x00 || data[pos + 1] != 0x00 || data[pos + 2] != 0x01)
-            return false;
-
-        var streamId = data[pos + 3];
-        if (streamId < MPID_VIDEO_FIRST || streamId > 0xEF)
-            return false;
-
-        // Scan the PES payload for sequence_header_code (0x000001B3) or
-        // group_start_code (0x000001B8).
-        var searchEnd = Math.Min(endPos, pos + 2048);
-        for (var s = pos + 4; s <= searchEnd - 4; s++)
-        {
-            if (data[s] == 0x00 && data[s + 1] == 0x00 && data[s + 2] == 0x01 &&
-                (data[s + 3] == 0xB3 || data[s + 3] == 0xB8))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool ContainsVideoStream(byte[] data, int packPos, int endPos)
-    {
-        var pos = packPos + 14;
-        if (pos + 4 > endPos)
-            return false;
-
-        if (data[pos] == 0x00 && data[pos + 1] == 0x00 && data[pos + 2] == 0x01 && data[pos + 3] == MPID_SYSTEM)
-        {
-            if (pos + 6 <= endPos)
-            {
-                var sysLen = (data[pos + 4] << 8) | data[pos + 5];
-                pos += 6 + sysLen;
-            }
-        }
-
-        if (pos + 4 > endPos)
-            return false;
-
-        if (data[pos] == 0x00 && data[pos + 1] == 0x00 && data[pos + 2] == 0x01)
-        {
-            var streamId = data[pos + 3];
-            return streamId >= MPID_VIDEO_FIRST && streamId <= 0xEF;
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// Builds a 2048-byte NAV pack with PCI and DSI packets.
@@ -456,7 +409,8 @@ public static class DvdVobMuxer
             var fwdIdx = FindVobuByPts(vobus, targetPtsFwd, vobuIndex, forward: true);
             if (fwdIdx >= 0 && fwdIdx < vobus.Count)
             {
-                var fwdSkip = j >= 15 && HasVideoBetween(vobus, lastFwdIdx + 1, fwdIdx - 1);
+                // Skip bit: set when jumping over multiple VOBUs (dvdauthor: nff > vff + 1)
+                var fwdSkip = j >= 15 && fwdIdx > lastFwdIdx + 1;
                 Write32(buf, fwdOff, MakeVobuOffset(sectorOffsets, vobuIndex, fwdIdx, vobus, fwdSkip));
                 lastFwdIdx = fwdIdx;
             }
@@ -470,7 +424,7 @@ public static class DvdVobMuxer
             var bwdIdx = FindVobuByPts(vobus, targetPtsBwd, vobuIndex, forward: false);
             if (bwdIdx >= 0 && bwdIdx < vobus.Count)
             {
-                var bwdSkip = j >= 15 && HasVideoBetween(vobus, bwdIdx + 1, lastBwdIdx - 1);
+                var bwdSkip = j >= 15 && bwdIdx < lastBwdIdx - 1;
                 Write32(buf, bwdOff, MakeVobuOffset(sectorOffsets, vobuIndex, bwdIdx, vobus, bwdSkip));
                 lastBwdIdx = bwdIdx;
             }
@@ -514,23 +468,25 @@ public static class DvdVobMuxer
         return -1;
     }
 
-    private static bool HasVideoBetween(List<VobuScan> vobus, int lo, int hi)
-    {
-        for (var i = Math.Max(lo, 0); i <= Math.Min(hi, vobus.Count - 1); i++)
-            if (vobus[i].HasVideo) return true;
-        return false;
-    }
-
+    /// <summary>
+    /// Finds the VOBU whose StartPts contains or is closest to targetPts.
+    /// Forward: returns the last VOBU whose StartPts &lt;= targetPts (the VOBU
+    /// that spans the target time, matching dvdauthor's findvobu behavior).
+    /// Backward: returns the first VOBU whose StartPts &lt;= targetPts.
+    /// </summary>
     private static int FindVobuByPts(List<VobuScan> vobus, long targetPts, int currentIndex, bool forward)
     {
         if (forward)
         {
+            var result = -1;
             for (var i = currentIndex + 1; i < vobus.Count; i++)
             {
-                if (vobus[i].StartPts >= targetPts)
-                    return i;
+                if (vobus[i].StartPts <= targetPts)
+                    result = i;
+                else
+                    break;
             }
-            return -1;
+            return result;
         }
 
         for (var i = currentIndex - 1; i >= 0; i--)
@@ -569,7 +525,7 @@ public static class DvdVobMuxer
         buf[offset + 1] = (byte)(scr >> 20);
         buf[offset + 2] = (byte)(((scr >> 12) & 0xF8) | ((scr >> 13) & 0x03) | 0x04);
         buf[offset + 3] = (byte)(scr >> 5);
-        buf[offset + 4] = (byte)(((scr << 3) & 0xF8) | 0x01);
+        buf[offset + 4] = (byte)(((scr << 3) & 0xF8) | 0x04);
     }
 
     private static void WriteBcdTime(Span<byte> buf, int offset, long pts, int fps, byte fpsCode)
@@ -583,6 +539,22 @@ public static class DvdVobMuxer
         buf[offset + 1] = (byte)(((m / 10) << 4) | (m % 10));
         buf[offset + 2] = (byte)(((s / 10) << 4) | (s % 10));
         buf[offset + 3] = (byte)((fpsCode << 6) | ((f / 10) << 4) | (f % 10));
+    }
+
+    /// <summary>
+    /// Rewrites any private_stream_2 (0xBF) PES start codes in the buffer to
+    /// padding_stream (0xBE) so DVD players don't mistake source-file NAV packs
+    /// for real navigation data.
+    /// </summary>
+    private static void NeutralizePrivateStream2(Span<byte> buf)
+    {
+        for (var i = 0; i <= buf.Length - 4; i++)
+        {
+            if (buf[i] == 0x00 && buf[i + 1] == 0x00 && buf[i + 2] == 0x01 && buf[i + 3] == MPID_PRIVATE2)
+            {
+                buf[i + 3] = 0xBE; // padding_stream
+            }
+        }
     }
 
     private static void Write16(Span<byte> buf, int off, ushort val)
