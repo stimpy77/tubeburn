@@ -9,7 +9,8 @@ namespace TubeBurn.DvdAuthoring;
 public sealed record VobMuxResult(
     long FileSizeBytes,
     int VobuCount,
-    IReadOnlyList<int> VobuSectorOffsets);
+    IReadOnlyList<int> VobuSectorOffsets,
+    long DurationPts);
 
 /// <summary>
 /// Muxes transcoded MPEG-PS files into DVD-Video VOBs by injecting NAV packs
@@ -43,13 +44,19 @@ public static class DvdVobMuxer
     /// Pass 1: stream-scan for VOBU boundaries.
     /// Pass 2: stream-write output with NAV packs injected.
     /// </summary>
+    /// <param name="startSector">
+    /// Sector offset of this VOB within the concatenated VTS VOB space.
+    /// VTS_01_1.VOB starts at 0; VTS_01_2.VOB starts at (size of VOB 1) / 2048, etc.
+    /// NAV pack LBN fields must reflect the global position, not per-file.
+    /// </param>
     public static async Task<VobMuxResult> MuxAsync(
         string sourceMpegPath,
         string outputVobPath,
         int vobId,
         int cellId,
         VideoStandard standard,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int startSector = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceMpegPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputVobPath);
@@ -69,9 +76,10 @@ public static class DvdVobMuxer
         for (var i = 0; i < vobus.Count - 1; i++)
             vobus[i] = vobus[i] with { EndPts = vobus[i + 1].StartPts };
 
-        // Calculate output sector layout.
+        // Calculate output sector layout.  Offsets are global (startSector-based)
+        // so that NAV pack LBN fields are correct in the concatenated VOB space.
         var vobuSectorOffsets = new List<int>();
-        var outputSector = 0;
+        var outputSector = startSector;
         for (var i = 0; i < vobus.Count; i++)
         {
             vobuSectorOffsets.Add(outputSector);
@@ -132,10 +140,14 @@ public static class DvdVobMuxer
             cellElapsedPts += vobu.EndPts - vobu.StartPts;
         }
 
+        // Total duration from actual PTS range.
+        var durationPts = vobus[^1].EndPts - vobus[0].StartPts;
+
         return new VobMuxResult(
             totalBytesWritten,
             vobus.Count,
-            vobuSectorOffsets);
+            vobuSectorOffsets,
+            durationPts);
     }
 
     /// <summary>

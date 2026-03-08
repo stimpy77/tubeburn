@@ -59,17 +59,24 @@ public sealed class DiscBurnService
                 Environment.GetEnvironmentVariable("TB_ENABLE_IMGBURN_FALLBACK"),
                 "1",
                 StringComparison.Ordinal);
-            // Attempt a single IMAPI burn at the requested speed.  We no longer
-            // cascade through lower speeds because once a write attempt fails the
-            // disc/drive session is typically in a bad state — retrying just wastes
-            // time and discs.  The user can retry on a fresh disc via the UI button.
+            // Try once, and if it fails with a "not ready" style error, wait 10s
+            // and auto-retry once before surfacing the failure to the user.
             var nativeBurnAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
             if (nativeBurnAttempt.Outcome == DiscBurnOutcome.Succeeded)
             {
                 return nativeBurnAttempt;
             }
 
-            var nativeFailureSummary = $"Native {requestedSpeed}x: {nativeBurnAttempt.Summary}";
+            // Auto-retry once after a short delay — the drive often just needs
+            // a moment to settle after initial disc insertion.
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+            var retryAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
+            if (retryAttempt.Outcome == DiscBurnOutcome.Succeeded)
+            {
+                return retryAttempt;
+            }
+
+            var nativeFailureSummary = $"Native {requestedSpeed}x: {nativeBurnAttempt.Summary} | Auto-retry: {retryAttempt.Summary}";
 
             if (!allowImgBurnFallback)
             {
@@ -261,6 +268,11 @@ public sealed class DiscBurnService
             var mcnDisabled = false;
             try { recorder.DisableMcn(); mcnDisabled = true; } catch { /* best-effort */ }
 
+            // Acquire exclusive access so Explorer, shell extensions, and antivirus
+            // cannot probe the drive mid-burn (a common cause of command timeouts).
+            var exclusiveAccess = false;
+            try { recorder.AcquireExclusiveAccess(false, "TubeBurn"); exclusiveAccess = true; } catch { /* best-effort */ }
+
             object? comDataWriter = null;
             object? comImageResult = null;
             object? comFsImage = null;
@@ -295,7 +307,7 @@ public sealed class DiscBurnService
                 // spinning up, seeking, or reading the disc TOC when we reach this
                 // point.  Poll IsCurrentMediaSupported with back-off so the initial
                 // write commands don't hit a "device not ready" SCSI error.
-                WaitForDriveReady(dataWriter, recorder, maxWaitSeconds: 20);
+                WaitForDriveReady(dataWriter, recorder, maxWaitSeconds: 30);
 
                 var mediaSupport = TryDescribeCurrentMediaSupport(dataWriter, recorder);
                 if (mediaSupport is not null)
@@ -329,6 +341,8 @@ public sealed class DiscBurnService
                     try { Marshal.ReleaseComObject(comImageResult); } catch { }
                 if (comFsImage is not null)
                     try { Marshal.ReleaseComObject(comFsImage); } catch { }
+                if (exclusiveAccess)
+                    try { recorder.ReleaseExclusiveAccess(); } catch { }
                 if (mcnDisabled)
                     try { recorder.EnableMcn(); } catch { }
                 try { Marshal.ReleaseComObject((object)recorder); } catch { }
@@ -402,6 +416,35 @@ public sealed class DiscBurnService
         {
             // Ignore when speed property is unavailable.
         }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void EjectAndWaitForReinsert(dynamic recorder, int maxWaitSeconds)
+    {
+        // Eject the tray so the drive fully resets its session state.
+        try { recorder.EjectMedia(); } catch { return; /* if eject fails, skip the cycle */ }
+
+        // Poll until media is detected again (user pushes the tray back in).
+        // For spring-loaded/slot-load drives there's no CloseTray — the user
+        // must physically close it.
+        var elapsed = 0;
+        while (elapsed < maxWaitSeconds)
+        {
+            Thread.Sleep(2000);
+            elapsed += 2;
+            try
+            {
+                // VolumePathNames is non-empty when the OS has re-mounted the media.
+                var paths = ReadVolumePathNames((object)recorder).ToList();
+                if (paths.Count > 0)
+                    return;
+            }
+            catch
+            {
+                // Drive still resetting — keep waiting.
+            }
+        }
+        // Timed out — proceed anyway; WaitForDriveReady will catch if still not ready.
     }
 
     [SupportedOSPlatform("windows")]

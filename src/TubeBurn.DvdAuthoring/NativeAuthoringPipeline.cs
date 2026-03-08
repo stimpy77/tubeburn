@@ -48,7 +48,9 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         // Mux transcoded MPEG-PS files into proper DVD VOBs with NAV packs.
         var standard = request.Project.Settings.Standard;
         var vobFileSizes = new List<long>();
+        var vobDurationsPts = new List<long>();
         var vobIndex = 1;
+        var nextStartSector = 0;
         foreach (var video in request.Project.Videos)
         {
             if (!File.Exists(video.TranscodedPath))
@@ -64,13 +66,16 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             var targetVobPath = Path.Combine(videoTsDirectory, $"VTS_01_{vobIndex}.VOB");
             var muxResult = await DvdVobMuxer.MuxAsync(
                 video.TranscodedPath, targetVobPath,
-                vobId: vobIndex, cellId: 1, standard, cancellationToken);
+                vobId: vobIndex, cellId: 1, standard, cancellationToken,
+                startSector: nextStartSector);
             vobFileSizes.Add(muxResult.FileSizeBytes);
+            vobDurationsPts.Add(muxResult.DurationPts);
+            nextStartSector += (int)(muxResult.FileSizeBytes / 2048);
             vobIndex++;
         }
 
-        // Generate spec-compliant IFO files using actual VOB sizes.
-        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes);
+        // Generate spec-compliant IFO files using actual VOB sizes and durations.
+        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.IFO"), vtsIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.BUP"), vtsIfo, cancellationToken);
 
