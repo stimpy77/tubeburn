@@ -121,25 +121,37 @@ This section defines the Program Chain (PGC) structure used for title playback a
 - **Title domain** (VTS_PGCIT): PGCs for video playback
 - **Menu domain** (VMGM_PGCI_UT / VTSM_PGCI_UT): PGCs for interactive menus
 
-### Title Playback — Single PGC with Multiple Programs
+### Title Playback — One PGC per Title (Multi-PGC)
 
-All videos in a VTS are placed into a **single PGC** with one program (chapter) per video. This is the current implemented structure.
+Each video gets its own PGC, matching the standard DVD-Video convention used by dvdauthor and commercial discs. PGCs are chained via `next_pgc_nr` / `prev_pgc_nr` for sequential auto-play.
 
 ```
 VTS_PGCIT:
-  PGC #1 (entry PGC)
-    nr_of_programs = N  (one per video)
-    nr_of_cells    = N  (one per video)
-    program_map    = [1, 2, 3, ..., N]  (each cell starts a new program)
-    cell_playback  = [cell_1, cell_2, ..., cell_N]
-    cell_position  = [vob_1/cell_1, vob_2/cell_1, ..., vob_N/cell_1]
-    post_command   = Exit
+  PGC #1 (entry PGC, title 1)
+    nr_of_programs = 1, nr_of_cells = 1
+    next_pgc_nr = 2, prev_pgc_nr = 0
+    post_command = LinkPGCN 2 (chain to next)
+    cell: VOB 1
+
+  PGC #2 (entry PGC, title 2)
+    nr_of_programs = 1, nr_of_cells = 1
+    next_pgc_nr = 3, prev_pgc_nr = 1
+    post_command = LinkPGCN 3
+    cell: VOB 2
+
+  ...
+
+  PGC #N (entry PGC, title N)
+    nr_of_programs = 1, nr_of_cells = 1
+    next_pgc_nr = 0, prev_pgc_nr = N-1
+    post_command = Exit
+    cell: VOB N
 
 VTS_PTT_SRPT (Part-of-Title Search Pointer Table):
   Title 1 → PGCN=1, PGN=1
-  Title 2 → PGCN=1, PGN=2
+  Title 2 → PGCN=2, PGN=1
   ...
-  Title N → PGCN=1, PGN=N
+  Title N → PGCN=N, PGN=1
 
 VMG TT_SRPT (Title Search Pointer Table):
   Title 1 → VTS=1, VTS_TTN=1
@@ -147,13 +159,12 @@ VMG TT_SRPT (Title Search Pointer Table):
   ...
 ```
 
-**Why single PGC:** dvdnav's >>| (next chapter) command advances to the next program within the current PGC. With separate PGCs (one per title), >>| had no next program to go to and fell back to the First Play PGC, resetting to title 1. Putting all videos as programs in one PGC makes >>| navigate between videos naturally.
-
 **Navigation behavior:**
-- VLC title menu → TT_SRPT → PTT_SRPT → jumps to correct program in the single PGC
-- >>| (next chapter) → next program in same PGC → next video
+- VLC Playback → Next/Previous Title → TT_SRPT → PTT_SRPT → jumps to correct PGC
+- Physical player >>| → next title via TT_SRPT navigation
 - Seek/fast-forward → VTS_VOBU_ADMAP (complete map of all VOBU sector addresses)
-- End of last program → post-command exits playback
+- End of title → post-command chains to next PGC (auto-play) or exits on last title
+- `next_pgc_nr` / `prev_pgc_nr` provide backup navigation path for players that use them
 
 ### Menu System PGC Plan (Phase 2-3)
 
@@ -181,9 +192,9 @@ Phase 3 — Multi-channel (VMGM + VTSM menus):
         - Button commands: JumpVTS_TT to play video
         - "Back" button: CallSS VMGM to return to channel select
     VTS_PGCIT:
-      PGC #1: All videos for this channel as programs
-        - Same single-PGC-with-multiple-programs pattern
-        - Post-command: CallSS VTSM to return to video select menu
+      PGC #1..N: One PGC per video, chained via next_pgc_nr
+        - Same multi-PGC pattern as Phase 1
+        - Post-command on last PGC: CallSS VTSM to return to video select menu
 ```
 
 **Key design rules:**
@@ -394,7 +405,7 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 
 ### Phase 1 — Working disc with auto-play, no menus (current)
 1. Dashboard UX: URL queue, save/load, tool discovery, one-click build orchestration
-2. Single VTS, all videos as programs in one PGC, sequential playback
+2. Single VTS, one PGC per video (multi-PGC), chained for sequential auto-play
 3. Native authoring generates VIDEO_TS + ISO; external bridge available as fallback
 4. Burn via IMAPI2 (Windows) or growisofs (Linux); ImgBurn opt-in fallback
 5. Over-capacity blocking, strict stage semantics, failure details in UI

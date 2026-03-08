@@ -98,11 +98,9 @@ public static class DvdIfoWriter
 
     /// <summary>
     /// Generates VTS_01_0.IFO (Video Title Set Information).
-    /// All VOB files are grouped into a single PGC with one program (chapter)
-    /// per VOB.  Each title in TT_SRPT maps via PTT_SRPT to a different
-    /// program within this PGC, so VLC's title menu still works while >>|
-    /// (next chapter) navigates between programs within the same PGC — the
-    /// simplest and most reliable dvdnav navigation path.
+    /// Each VOB gets its own PGC (one title = one PGC), matching the standard
+    /// DVD-Video convention used by dvdauthor and commercial discs.
+    /// PGCs are chained via next_pgc_nr/prev_pgc_nr for sequential playback.
     /// </summary>
     public static byte[] WriteVtsIfo(
         VideoStandard standard,
@@ -126,22 +124,19 @@ public static class DvdIfoWriter
         }
 
         // ── Calculate table sizes ──────────────────────────────────
-        // PTT: one entry per title, each title has 1 chapter
-        // All titles map to PGCN=1 (single PGC), with PGN=title index
+        // PTT: one entry per title, each maps to its own PGCN with PGN=1
         var pttSize = 8 + titles * 4 + titles * 4;
         var pttSectors = CeilDiv(pttSize, SectorSize);
 
-        // Single PGC with titles programs and titles cells:
-        //   0xEC header + cmd table (8 hdr + 8 post-cmd)
-        //   + program map (titles bytes, word-aligned)
-        //   + cell_playback (titles * 24)
-        //   + cell_position (titles * 4)
+        // Each PGC: 0xEC header + cmd table (8 hdr + 8 post-cmd)
+        //   + program map (2 bytes, word-aligned: 1 entry padded)
+        //   + cell_playback (1 * 24) + cell_position (1 * 4)
         const int cmdTblLen = 8 + 8;          // hdr + 1 post-cmd
-        var progMapLen = titles + (titles & 1);  // word-aligned
-        var pgcLen = 0xEC + cmdTblLen + progMapLen + titles * 24 + titles * 4;
+        const int progMapLen = 2;             // 1 byte + 1 pad for word alignment
+        const int pgcLen = 0xEC + cmdTblLen + progMapLen + 24 + 4;
 
-        // PGCIT: 8-byte header + 1 SRP (8 bytes) + 1 PGC
-        var pgcitLen = 8 + 8 + pgcLen;
+        // PGCIT: 8-byte header + titles SRPs (8 bytes each) + titles PGCs
+        var pgcitLen = 8 + titles * 8 + titles * pgcLen;
         var pgcitSectors = CeilDiv(pgcitLen, SectorSize);
 
         var cAdtLen = 8 + titles * 12;
@@ -193,7 +188,7 @@ public static class DvdIfoWriter
         mat[0x205] = 0x01;                                    // 48 kHz, 2 ch
 
         // ── VTS_PTT_SRPT ──────────────────────────────────────────
-        // All titles map to PGCN=1 (single PGC), with different PGN values.
+        // Each title maps to its own PGC (PGCN=i+1, PGN=1).
         var ptt = buffer.AsSpan(pttSec * SectorSize);
         Write16(ptt, 0, (ushort)titles);
         var pttDataOff = 8 + titles * 4;
@@ -201,87 +196,87 @@ public static class DvdIfoWriter
         for (var i = 0; i < titles; i++)
         {
             Write32(ptt, 8 + i * 4, (uint)(pttDataOff + i * 4));
-            Write16(ptt, pttDataOff + i * 4, 1);                   // PGCN = 1 (single PGC)
-            Write16(ptt, pttDataOff + i * 4 + 2, (ushort)(i + 1)); // PGN = title index (1-based)
+            Write16(ptt, pttDataOff + i * 4, (ushort)(i + 1));     // PGCN = title index (1-based)
+            Write16(ptt, pttDataOff + i * 4 + 2, 1);               // PGN = 1
         }
 
         // ── VTS_PGCIT ─────────────────────────────────────────────
-        // Single PGC containing all titles as separate programs/chapters.
+        // One PGC per title, chained via next_pgc_nr / prev_pgc_nr.
         var pgcit = buffer.AsSpan(pgcitSec * SectorSize);
-        Write16(pgcit, 0, 1);                                   // nr of PGCs = 1
+        Write16(pgcit, 0, (ushort)titles);                      // nr of PGCs
         Write32(pgcit, 4, (uint)(pgcitLen - 1));
 
-        // Single search pointer for the one PGC
-        var srp = pgcit[8..];
-        srp[0] = 0x81;                                          // entry PGC for title 1
-        Write32(srp, 4, 16);                                    // offset to PGC data (8 hdr + 8 SRP)
-
-        // PGC
-        var pgc = pgcit[16..];
-        pgc[0x02] = (byte)titles;                               // nr_of_programs
-        pgc[0x03] = (byte)titles;                               // nr_of_cells
-
-        // PGC playback time — sum of all title durations.
-        var totalDurationSeconds = 0;
-        for (var t = 0; t < titles; t++)
+        // Search pointers (8 bytes each)
+        var pgcDataOffset = 8 + titles * 8;
+        for (var i = 0; i < titles; i++)
         {
-            totalDurationSeconds += vobDurationsPts is not null && t < vobDurationsPts.Count
-                ? (int)(vobDurationsPts[t] / 90000)
-                : EstimateDurationSeconds(vobFileSizes[t]);
+            var srp = pgcit.Slice(8 + i * 8, 8);
+            srp[0] = (byte)(0x81 + i);                          // entry PGC, title i+1
+            Write32(srp, 4, (uint)(pgcDataOffset + i * pgcLen)); // offset to PGC data
         }
-        WriteBcdTime(pgc[0x04..], totalDurationSeconds, fps, fpsFlag);
 
-        Write16(pgc, 0x0C, 0x8000);                            // audio stream 0 present
-
-        var cmdOff = 0xEC;
-        var mapOff = cmdOff + cmdTblLen;
-        var cpbOff = mapOff + progMapLen;
-        var cpsOff = cpbOff + titles * 24;
-
-        Write16(pgc, 0xE4, (ushort)cmdOff);
-        Write16(pgc, 0xE6, (ushort)mapOff);
-        Write16(pgc, 0xE8, (ushort)cpbOff);
-        Write16(pgc, 0xEA, (ushort)cpsOff);
-
-        // Command table: 1 post-command (exit after last program)
-        Write16(pgc, cmdOff + 2, 1);                           // nr_of_post
-        Write16(pgc, cmdOff + 6, 7 + 8);                      // end_address
-        // Exit: 30 01 00 00 00 00 00 00
-        pgc[cmdOff + 8] = 0x30;
-        pgc[cmdOff + 9] = 0x01;
-
-        // Program map: each cell starts a new program (chapter)
-        for (var t = 0; t < titles; t++)
-            pgc[mapOff + t] = (byte)(t + 1);                   // program t+1 starts at cell t+1
-
-        // Cell playback (24 bytes per cell)
-        for (var t = 0; t < titles; t++)
+        // PGCs
+        for (var i = 0; i < titles; i++)
         {
-            var c = pgc.Slice(cpbOff + t * 24, 24);
+            var pgc = pgcit.Slice(pgcDataOffset + i * pgcLen, pgcLen);
 
-            // STC discontinuity flag for all cells after the first
-            // (each VOB has its own PTS timeline)
-            if (t > 0)
-                c[0] = 0x02;                                    // stc_discontinuity
+            pgc[0x02] = 1;                                      // nr_of_programs = 1
+            pgc[0x03] = 1;                                      // nr_of_cells = 1
 
-            var durationSeconds = vobDurationsPts is not null && t < vobDurationsPts.Count
-                ? (int)(vobDurationsPts[t] / 90000)
-                : EstimateDurationSeconds(vobFileSizes[t]);
+            var durationSeconds = vobDurationsPts is not null && i < vobDurationsPts.Count
+                ? (int)(vobDurationsPts[i] / 90000)
+                : EstimateDurationSeconds(vobFileSizes[i]);
+            WriteBcdTime(pgc[0x04..], durationSeconds, fps, fpsFlag);
+
+            Write16(pgc, 0x0C, 0x8000);                        // audio stream 0 present
+
+            // PGC navigation pointers
+            Write16(pgc, 0x9C, i < titles - 1 ? (ushort)(i + 2) : (ushort)0); // next_pgc_nr
+            Write16(pgc, 0x9E, i > 0 ? (ushort)i : (ushort)0);               // prev_pgc_nr
+
+            var cmdOff = 0xEC;
+            var mapOff = cmdOff + cmdTblLen;
+            var cpbOff = mapOff + progMapLen;
+            var cpsOff = cpbOff + 24;
+
+            Write16(pgc, 0xE4, (ushort)cmdOff);
+            Write16(pgc, 0xE6, (ushort)mapOff);
+            Write16(pgc, 0xE8, (ushort)cpbOff);
+            Write16(pgc, 0xEA, (ushort)cpsOff);
+
+            // Command table: 1 post-command
+            Write16(pgc, cmdOff + 2, 1);                       // nr_of_post
+            Write16(pgc, cmdOff + 6, 7 + 8);                  // end_address
+            if (i < titles - 1)
+            {
+                // LinkPGCN next: 20 04 00 00 00 00 00 NN
+                pgc[cmdOff + 8] = 0x20;
+                pgc[cmdOff + 9] = 0x04;
+                pgc[cmdOff + 15] = (byte)(i + 2);               // next PGCN (1-based)
+            }
+            else
+            {
+                // Exit: 30 01 00 00 00 00 00 00
+                pgc[cmdOff + 8] = 0x30;
+                pgc[cmdOff + 9] = 0x01;
+            }
+
+            // Program map: single program starting at cell 1
+            pgc[mapOff] = 1;
+
+            // Cell playback (24 bytes)
+            var c = pgc.Slice(cpbOff, 24);
             WriteBcdTime(c[4..], durationSeconds, fps, fpsFlag);
-            Write32(c, 8, (uint)vobStart[t]);                  // first_sector
-            // last_vobu_start: sector of the last VOBU's NAV pack in this cell.
-            var lastVobuStart = vobuSectorOffsets is not null && t < vobuSectorOffsets.Count && vobuSectorOffsets[t].Count > 0
-                ? (uint)vobuSectorOffsets[t][^1]
-                : (uint)vobStart[t];
+            Write32(c, 8, (uint)vobStart[i]);                  // first_sector
+            var lastVobuStart = vobuSectorOffsets is not null && i < vobuSectorOffsets.Count && vobuSectorOffsets[i].Count > 0
+                ? (uint)vobuSectorOffsets[i][^1]
+                : (uint)vobStart[i];
             Write32(c, 16, lastVobuStart);                     // last_vobu_start
-            Write32(c, 20, (uint)(vobStart[t] + vobSectors[t] - 1)); // last_sector
-        }
+            Write32(c, 20, (uint)(vobStart[i] + vobSectors[i] - 1)); // last_sector
 
-        // Cell position (4 bytes per cell)
-        for (var t = 0; t < titles; t++)
-        {
-            var p = pgc.Slice(cpsOff + t * 4, 4);
-            Write16(p, 0, (ushort)(t + 1));                    // vob_id
+            // Cell position (4 bytes)
+            var p = pgc.Slice(cpsOff, 4);
+            Write16(p, 0, (ushort)(i + 1));                    // vob_id
             p[3] = 1;                                           // cell_id
         }
 

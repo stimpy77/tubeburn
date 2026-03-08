@@ -507,6 +507,22 @@ public sealed class MainWindowViewModel : ObservableObject
         OverallProgress = Math.Clamp(overallProgress, 0, 100);
     }
 
+    /// <summary>
+    /// Updates each queue item's EstimatedSizeBytes from the actual transcoded file on disk.
+    /// </summary>
+    public void RefreshEstimatedSizesFromDisk()
+    {
+        foreach (var item in Queue)
+        {
+            if (File.Exists(item.TranscodedPath))
+            {
+                item.EstimatedSizeBytes = new FileInfo(item.TranscodedPath).Length;
+            }
+        }
+
+        RefreshMetrics();
+    }
+
     public void NoteMediaPreparationSkipped(string reason)
     {
         SetStage("Download", "Done");
@@ -826,10 +842,14 @@ public sealed class MainWindowViewModel : ObservableObject
     private void ResetPipelineStages()
     {
         PipelineStages.Clear();
-        PipelineStages.Add(new PipelineStageItem("Download", "Resolve source media with yt-dlp.", "Pending", _pendingBrush));
-        PipelineStages.Add(new PipelineStageItem("Transcode", "Convert sources to DVD-compliant MPEG-2.", "Pending", _pendingBrush));
-        PipelineStages.Add(new PipelineStageItem("Author", "Generate VIDEO_TS + ISO with native-first authoring.", "Pending", _pendingBrush));
+        PipelineStages.Add(new PipelineStageItem("Download", "Resolve source media with yt-dlp.", "Pending", _pendingBrush,
+            cleanupFolder: Path.Combine(OutputFolder, "downloads")));
+        PipelineStages.Add(new PipelineStageItem("Transcode", "Convert sources to DVD-compliant MPEG-2.", "Pending", _pendingBrush,
+            cleanupFolder: Path.Combine(OutputFolder, "transcoded")));
+        PipelineStages.Add(new PipelineStageItem("Author", "Generate VIDEO_TS + ISO with native-first authoring.", "Pending", _pendingBrush,
+            cleanupFolder: Path.Combine(OutputFolder, ".tubeburn")));
         PipelineStages.Add(new PipelineStageItem("Burn", "Write authored output to disc using native burner.", "Pending", _pendingBrush));
+        RefreshCleanupStates();
     }
 
     private void SetStage(string stageName, string state)
@@ -855,6 +875,63 @@ public sealed class MainWindowViewModel : ObservableObject
         if (state != "Needs attention")
         {
             stage.IsRetryAvailable = false;
+        }
+
+        RefreshCleanupStates();
+    }
+
+    /// <summary>
+    /// Recalculates IsCleanupEnabled for each pipeline stage.
+    /// A cleanup button is disabled when this stage or the stage below it is in progress.
+    /// </summary>
+    public void RefreshCleanupStates()
+    {
+        for (var i = 0; i < PipelineStages.Count; i++)
+        {
+            var stage = PipelineStages[i];
+            if (stage.CleanupFolder is null)
+            {
+                stage.IsCleanupEnabled = false;
+                continue;
+            }
+
+            // Disabled if this stage or any subsequent stage is active/in-progress.
+            var blocked = false;
+            for (var j = i; j < PipelineStages.Count; j++)
+            {
+                if (PipelineStages[j].State is "Active")
+                {
+                    blocked = true;
+                    break;
+                }
+            }
+
+            stage.IsCleanupEnabled = !blocked;
+        }
+    }
+
+    public void CleanupStageOutput(PipelineStageItem stage)
+    {
+        if (stage.CleanupFolder is null || !Directory.Exists(stage.CleanupFolder))
+        {
+            AddRecentActivity($"Nothing to clean for {stage.Name} — folder does not exist.");
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(stage.CleanupFolder, recursive: true);
+            AddRecentActivity($"Cleaned {stage.Name} output: {stage.CleanupFolder}");
+
+            // If we cleaned authored output, clear the last working directory reference.
+            if (string.Equals(stage.Name, "Author", StringComparison.OrdinalIgnoreCase))
+            {
+                LastAuthoredWorkingDirectory = string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            AddRecentActivity($"Cleanup failed for {stage.Name}: {ex.Message}");
         }
     }
 
@@ -1127,7 +1204,7 @@ public sealed class QueuedVideoItem : ObservableObject
         set => SetProperty(ref _transcodedPath, value);
     }
 
-    public long EstimatedSizeBytes { get; init; }
+    public long EstimatedSizeBytes { get; set; }
 }
 
 public sealed class PipelineStageItem : ObservableObject
@@ -1135,18 +1212,27 @@ public sealed class PipelineStageItem : ObservableObject
     private string _state;
     private IBrush _accentBrush;
     private bool _isRetryAvailable;
+    private bool _isCleanupEnabled;
 
-    public PipelineStageItem(string name, string detail, string state, IBrush accentBrush)
+    public PipelineStageItem(string name, string detail, string state, IBrush accentBrush, string? cleanupFolder = null)
     {
         Name = name;
         Detail = detail;
         _state = state;
         _accentBrush = accentBrush;
+        CleanupFolder = cleanupFolder;
     }
 
     public string Name { get; }
 
     public string Detail { get; }
+
+    /// <summary>
+    /// The folder path this stage's cleanup button deletes, or null if cleanup is not applicable.
+    /// </summary>
+    public string? CleanupFolder { get; }
+
+    public bool HasCleanupFolder => CleanupFolder is not null;
 
     public string State
     {
@@ -1176,6 +1262,12 @@ public sealed class PipelineStageItem : ObservableObject
                 OnPropertyChanged(nameof(IsStateVisible));
             }
         }
+    }
+
+    public bool IsCleanupEnabled
+    {
+        get => _isCleanupEnabled;
+        set => SetProperty(ref _isCleanupEnabled, value);
     }
 
     public bool IsStateVisible => !IsRetryAvailable;

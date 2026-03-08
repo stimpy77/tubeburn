@@ -90,24 +90,9 @@
         </Style>
     </Window.Styles>
 
-    <Border Padding="24" Background="#0B1020">
-        <Grid RowDefinitions="Auto,*">
-            <Border Grid.Row="0"
-                    Height="30"
-                    Margin="0,0,0,8"
-                    Background="#121B32"
-                    CornerRadius="10"
-                    BorderBrush="#2E3D63"
-                    BorderThickness="1"
-                    PointerPressed="OnWindowDragStripPointerPressed">
-                <TextBlock HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Opacity="0.8"
-                           IsHitTestVisible="False"
-                           Text="Drag window here" />
-            </Border>
-
-            <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1">
+    <Border Padding="24" Background="#0B1020"
+            PointerPressed="OnWindowDragStripPointerPressed">
+        <ScrollViewer x:Name="MainScrollViewer">
                 <StackPanel Spacing="20">
                 <Border Classes="heroCard">
                     <Grid ColumnDefinitions="2.2*,1*" ColumnSpacing="20">
@@ -315,23 +300,32 @@
                                 <ItemsControl ItemsSource="{Binding PipelineStages}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="viewModels:PipelineStageItem">
-                                            <Border Classes="queueItem" Margin="0,0,0,10">
-                                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                                                    <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Top"
-                                                            Background="{Binding AccentBrush}" />
-                                                    <StackPanel Grid.Column="1">
-                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
-                                                        <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
-                                                    </StackPanel>
-                                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding State}"
-                                                               IsVisible="{Binding IsStateVisible}" />
-                                                    <Button Grid.Column="2" VerticalAlignment="Center"
-                                                            Classes="primary" Padding="12,6"
-                                                            Content="Retry Burn"
-                                                            IsVisible="{Binding IsRetryAvailable}"
-                                                            Click="OnRetryBurnClick" />
-                                                </Grid>
-                                            </Border>
+                                            <StackPanel Margin="0,0,0,10">
+                                                <Border Classes="queueItem">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                        <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Top"
+                                                                Background="{Binding AccentBrush}" />
+                                                        <StackPanel Grid.Column="1">
+                                                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                            <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding State}"
+                                                                   IsVisible="{Binding IsStateVisible}" />
+                                                        <Button Grid.Column="2" VerticalAlignment="Center"
+                                                                Classes="primary" Padding="12,6"
+                                                                Content="Retry Burn"
+                                                                IsVisible="{Binding IsRetryAvailable}"
+                                                                Click="OnRetryBurnClick" />
+                                                    </Grid>
+                                                </Border>
+                                                <Button Classes="secondary" Padding="8,3" Margin="20,4,0,0"
+                                                        FontSize="11"
+                                                        Content="Clean Up"
+                                                        IsVisible="{Binding HasCleanupFolder}"
+                                                        IsEnabled="{Binding IsCleanupEnabled}"
+                                                        Tag="{Binding}"
+                                                        Click="OnCleanupStageClick" />
+                                            </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -402,6 +396,5 @@
                 </Grid>
                 </StackPanel>
             </ScrollViewer>
-        </Grid>
     </Border>
 </Window>

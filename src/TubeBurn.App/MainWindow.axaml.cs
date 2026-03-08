@@ -286,6 +286,7 @@ public partial class MainWindow : Window
 
         var project = await _projectFileService.LoadAsync(path);
         ViewModel.LoadProject(project);
+        ViewModel.RefreshEstimatedSizesFromDisk();
         ClearPendingBurnRetryContext();
         AppLog.Info($"Project loaded: {path}");
     }
@@ -375,10 +376,20 @@ public partial class MainWindow : Window
                 }
 
                 ViewModel.NoteMediaPreparationSkipped("Using existing source/transcoded media because yt-dlp/ffmpeg are unavailable.");
+                ViewModel.RefreshEstimatedSizesFromDisk();
                 AppLog.Warn("Media pipeline bypassed; existing prepared media detected.");
             }
 
+            // Re-estimate sizes from actual transcoded files and re-check disc capacity.
+            ViewModel.RefreshEstimatedSizesFromDisk();
             project = ViewModel.BuildProject();
+            var actualBytes = project.Channels.SelectMany(ch => ch.Videos).Sum(v => v.EstimatedSizeBytes);
+            if (actualBytes > capacityBytes)
+            {
+                ViewModel.MarkOverCapacityBlocked(actualBytes, capacityBytes, discLabel);
+                AppLog.Warn($"Build blocked after transcode: over capacity. Actual={actualBytes}, Capacity={capacityBytes}, Disc={discLabel}.");
+                return;
+            }
             await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
             ViewModel.MarkAuthoringStarted();
             AppLog.Info("Authoring started.");
@@ -558,6 +569,14 @@ public partial class MainWindow : Window
     }
 
     private void OnRetryBurnClick(object? sender, RoutedEventArgs e) => OnBuildAndBurnClick(sender, e);
+
+    private void OnCleanupStageClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: PipelineStageItem stage })
+        {
+            ViewModel.CleanupStageOutput(stage);
+        }
+    }
 
     private void OnTestOutputClick(object? sender, RoutedEventArgs e)
     {
