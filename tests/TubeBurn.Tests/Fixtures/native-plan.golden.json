@@ -1,0 +1,22 @@
+{
+  "TitlesetCount": 1,
+  "TitleCount": 2,
+  "PgcProgramCounts": [
+    2
+  ],
+  "VobSegmentSizes": [
+    1000000000,
+    200000000,
+    900000000
+  ],
+  "MenuPages": [
+    {
+      "ChannelName": "Demo Channel",
+      "PageNumber": 1,
+      "Labels": [
+        "Episode 1",
+        "Episode 2"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TubeBurn.App/TubeBurn.App.csproj" />
+    <Project Path="src/TubeBurn.Domain/TubeBurn.Domain.csproj" />
+    <Project Path="src/TubeBurn.DvdAuthoring/TubeBurn.DvdAuthoring.csproj" />
+    <Project Path="src/TubeBurn.Infrastructure/TubeBurn.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TubeBurn.DesktopUiTests/TubeBurn.DesktopUiTests.csproj" />
+    <Project Path="tests/TubeBurn.Tests/TubeBurn.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,396 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:viewModels="using:TubeBurn.App.ViewModels"
+        x:DataType="viewModels:MainWindowViewModel"
+        mc:Ignorable="d"
+        d:DesignWidth="1280"
+        d:DesignHeight="820"
+        x:Class="TubeBurn.App.MainWindow"
+        Title="{Binding Title}"
+        MinWidth="1160"
+        MinHeight="760"
+        Background="#0B1020"
+        ExtendClientAreaToDecorationsHint="True">
+    <Window.Styles>
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="#151C31" />
+            <Setter Property="BorderBrush" Value="#24304D" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="18" />
+            <Setter Property="Padding" Value="18" />
+        </Style>
+        <Style Selector="Border.heroCard">
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#1B2442" Offset="0" />
+                    <GradientStop Color="#251733" Offset="0.55" />
+                    <GradientStop Color="#422141" Offset="1" />
+                </LinearGradientBrush>
+            </Setter>
+            <Setter Property="BorderBrush" Value="#38476E" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="24" />
+            <Setter Property="Padding" Value="24" />
+        </Style>
+        <Style Selector="Border.metricCard">
+            <Setter Property="Background" Value="#11192D" />
+            <Setter Property="BorderBrush" Value="#24304D" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+        <Style Selector="Border.queueItem">
+            <Setter Property="Background" Value="#10172A" />
+            <Setter Property="BorderBrush" Value="#212B46" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="14" />
+        </Style>
+        <Style Selector="Border.pill">
+            <Setter Property="Background" Value="#1D2741" />
+            <Setter Property="BorderBrush" Value="#2E3D63" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="10,4" />
+        </Style>
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="#FF6A3D" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#FF6A3D" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="16,12" />
+        </Style>
+        <Style Selector="Button.secondary">
+            <Setter Property="Background" Value="#1A2238" />
+            <Setter Property="Foreground" Value="#E5E7EB" />
+            <Setter Property="BorderBrush" Value="#33415F" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="16,12" />
+        </Style>
+        <Style Selector="TextBlock.eyebrow">
+            <Setter Property="Foreground" Value="#9FB0D8" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#A9B4CC" />
+        </Style>
+        <Style Selector="TextBox.inputArea">
+            <Setter Property="MinHeight" Value="132" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="AcceptsReturn" Value="True" />
+        </Style>
+    </Window.Styles>
+
+    <Border Padding="24" Background="#0B1020">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0"
+                    Height="30"
+                    Margin="0,0,0,8"
+                    Background="#121B32"
+                    CornerRadius="10"
+                    BorderBrush="#2E3D63"
+                    BorderThickness="1"
+                    PointerPressed="OnWindowDragStripPointerPressed">
+                <TextBlock HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Opacity="0.8"
+                           IsHitTestVisible="False"
+                           Text="Drag window here" />
+            </Border>
+
+            <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1">
+                <StackPanel Spacing="20">
+                <Border Classes="heroCard">
+                    <Grid ColumnDefinitions="2.2*,1*" ColumnSpacing="20">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="eyebrow" Text="PHASE 1 WORKFLOW" />
+                            <TextBlock FontSize="34" FontWeight="Bold" Text="{Binding Title}" />
+                            <TextBlock FontSize="16" MaxWidth="720" TextWrapping="Wrap" Text="{Binding Subtitle}" />
+                            <WrapPanel Margin="0,6,0,0" ItemWidth="220">
+                                <Border Classes="pill" Margin="0,0,8,8">
+                                    <TextBlock Text="{Binding ProjectSummary}" />
+                                </Border>
+                                <Border Classes="pill" Margin="0,0,8,8">
+                                    <TextBlock Text="{Binding BuildStatus}" />
+                                </Border>
+                                <Border Classes="pill" Margin="0,0,8,8">
+                                    <TextBlock Text="{Binding SelectedBackend}" />
+                                </Border>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
+                                <Button x:Name="BuildAndBurnButton" Classes="primary" Click="OnBuildAndBurnClick" Content="Build and Burn" />
+                                <Button x:Name="DiscoverToolsButton" Classes="secondary" Click="OnDiscoverToolsClick" Content="Discover Tools" />
+                                <Button x:Name="SaveProjectButton" Classes="secondary" Click="OnSaveProjectClick" Content="Save Project" />
+                                <Button x:Name="LoadProjectButton" Classes="secondary" Click="OnLoadProjectClick" Content="Load Project" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Spacing="12">
+                            <TextBlock Classes="eyebrow" Text="PIPELINE HEALTH" />
+                            <TextBlock FontSize="24" FontWeight="Bold" Text="{Binding OverallProgress, StringFormat={}{0:0}%}" />
+                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding OverallProgress}" Height="10" />
+                            <TextBlock Classes="muted" Text="{Binding CurrentStage}" />
+                            <ItemsControl ItemsSource="{Binding RecentActivity}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Classes="muted" Margin="0,2,0,0" Text="{Binding .}" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <ItemsControl ItemsSource="{Binding Metrics}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="viewModels:MetricTile">
+                            <Border Classes="metricCard" Margin="0,0,12,0">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="eyebrow" Text="{Binding Label}" />
+                                    <TextBlock FontSize="28" FontWeight="Bold" Text="{Binding Value}" />
+                                    <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="1.65*,1*" ColumnSpacing="20">
+                    <StackPanel Grid.Column="0" Spacing="20">
+                        <Border Classes="card">
+                            <StackPanel Spacing="14">
+                                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
+                                    <TextBlock Grid.Column="0" Grid.Row="0" Classes="sectionTitle" Text="Source URLs" />
+                                    <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                        <Button x:Name="ImportUrlsButton" Classes="secondary" Click="OnImportUrlsClick" Content="Import File" />
+                                        <Button x:Name="AddUrlsButton" Classes="secondary" Click="OnAddUrlsClick" Content="Add to Queue" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="0"
+                                               Grid.Row="1"
+                                               Grid.ColumnSpan="2"
+                                               Classes="muted"
+                                               Text="Paste one or more URLs. They are queued now and can later drive download/transcode integration."
+                                               TextWrapping="Wrap" />
+                                </Grid>
+
+                                <TextBox x:Name="PendingUrlsTextBox"
+                                         Classes="inputArea"
+                                         Watermark="Paste one URL per line"
+                                         Text="{Binding PendingUrls, Mode=TwoWay}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="14">
+                                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
+                                    <TextBlock Grid.Column="0" Grid.Row="0" Classes="sectionTitle" Text="Video Queue" />
+                                    <Button x:Name="ClearQueueButton" Grid.Column="1" Grid.Row="0" Classes="secondary" Click="OnClearQueueClick" Content="Clear Queue" HorizontalAlignment="Right" />
+                                    <TextBlock Grid.Column="0"
+                                               Grid.Row="1"
+                                               Grid.ColumnSpan="2"
+                                               Classes="muted"
+                                               Text="Queue entries hold the project state that gets saved, loaded, and translated into dvdauthor bridge input."
+                                               TextWrapping="Wrap" />
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding Queue}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="viewModels:QueuedVideoItem">
+                                            <Border Classes="queueItem" Margin="0,0,0,12">
+                                                <StackPanel Spacing="10">
+                                                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+                                                        <StackPanel>
+                                                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Title}" />
+                                                            <TextBlock Classes="muted" Text="{Binding Channel}" />
+                                                            <TextBlock Classes="muted" FontSize="12" Text="{Binding Url}" TextWrapping="Wrap" />
+                                                        </StackPanel>
+                                                        <Border Grid.Column="1" Classes="pill" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Status}" />
+                                                        </Border>
+                                                        <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Duration}" />
+                                                    </Grid>
+                                                    <TextBlock Classes="muted" Text="{Binding Detail}" />
+                                                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding Progress}" Height="8" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Spacing="20">
+                        <Border Classes="card">
+                            <StackPanel Spacing="14">
+                                <TextBlock Classes="sectionTitle" Text="Project Settings" />
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                                    <StackPanel Grid.Row="0" Grid.Column="0" Spacing="6">
+                                        <TextBlock Classes="eyebrow" Text="VIDEO STANDARD" />
+                                        <ComboBox ItemsSource="{Binding VideoStandards}" SelectedItem="{Binding SelectedVideoStandard, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="0" Grid.Column="1" Spacing="6">
+                                        <TextBlock Classes="eyebrow" Text="DISC TYPE" />
+                                        <ComboBox ItemsSource="{Binding DiscTypes}" SelectedItem="{Binding SelectedDiscType, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="WRITE SPEED" />
+                                        <ComboBox ItemsSource="{Binding WriteSpeeds}" SelectedItem="{Binding SelectedWriteSpeed, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="BACKEND" />
+                                        <ComboBox ItemsSource="{Binding AvailableBackends}" SelectedItem="{Binding SelectedBackend, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="OUTPUT FOLDER" />
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <TextBox Text="{Binding OutputFolder, Mode=TwoWay}" />
+                                            <Button x:Name="BrowseOutputFolderButton" Grid.Column="1" Classes="secondary" Click="OnChooseOutputFolderClick" Content="Browse" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="BURN DRIVE" />
+                                        <ComboBox ItemsSource="{Binding AvailableBurnDrives}" SelectedItem="{Binding SelectedBurnDrive, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <TextBlock Classes="sectionTitle" Text="Tool Paths (Optional Override)" />
+                                <TextBlock Classes="muted" Text="If a tool is missing, browse to its executable. TubeBurn also checks OS default install paths first." TextWrapping="Wrap" />
+
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
+                                    <TextBlock Grid.Row="0" VerticalAlignment="Center" Text="yt-dlp" />
+                                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding YtDlpToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseYtDlpToolButton" Grid.Row="0" Grid.Column="2" Classes="secondary" Tag="yt-dlp" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="ffmpeg" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding FfmpegToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseFfmpegToolButton" Grid.Row="1" Grid.Column="2" Classes="secondary" Tag="ffmpeg" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="dvdauthor" />
+                                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding DvdauthorToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseDvdauthorToolButton" Grid.Row="2" Grid.Column="2" Classes="secondary" Tag="dvdauthor" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="mkisofs" />
+                                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MkisofsToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseMkisofsToolButton" Grid.Row="3" Grid.Column="2" Classes="secondary" Tag="mkisofs" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="4" VerticalAlignment="Center" Text="growisofs" />
+                                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding GrowisofsToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseGrowisofsToolButton" Grid.Row="4" Grid.Column="2" Classes="secondary" Tag="growisofs" Click="OnBrowseToolPathClick" Content="Browse" />
+
+                                    <TextBlock Grid.Row="5" VerticalAlignment="Center" Text="ImgBurn" />
+                                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ImgBurnToolPath, Mode=TwoWay}" Watermark="Auto-detect if empty" />
+                                    <Button x:Name="BrowseImgBurnToolButton" Grid.Row="5" Grid.Column="2" Classes="secondary" Tag="ImgBurn" Click="OnBrowseToolPathClick" Content="Browse" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="14">
+                                <TextBlock Classes="sectionTitle" Text="Build Progress" />
+                                <ItemsControl ItemsSource="{Binding PipelineStages}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="viewModels:PipelineStageItem">
+                                            <Border Classes="queueItem" Margin="0,0,0,10">
+                                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                    <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Top"
+                                                            Background="{Binding AccentBrush}" />
+                                                    <StackPanel Grid.Column="1">
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                        <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding State}"
+                                                               IsVisible="{Binding IsStateVisible}" />
+                                                    <Button Grid.Column="2" VerticalAlignment="Center"
+                                                            Classes="primary" Padding="12,6"
+                                                            Content="Retry Burn"
+                                                            IsVisible="{Binding IsRetryAvailable}"
+                                                            Click="OnRetryBurnClick" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Border Classes="queueItem">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock FontWeight="SemiBold" Text="Failure detail" />
+                                        <TextBlock Classes="muted" Text="{Binding FailurePanelText}" TextWrapping="Wrap" />
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <TextBlock Classes="muted" VerticalAlignment="Center" Text="{Binding LogFilePath}" TextWrapping="Wrap" />
+                                            <Button x:Name="OpenLogsFolderButton"
+                                                    Grid.Column="1"
+                                                    Classes="secondary"
+                                                    Click="OnOpenLogsFolderClick"
+                                                    Content="Open Logs Folder" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="sectionTitle" Text="Discovered Tools" />
+                                    <Button x:Name="RefreshToolsButton" Grid.Column="1" Classes="secondary" Click="OnDiscoverToolsClick" Content="Refresh" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding ToolStatuses}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="viewModels:ToolStatusItem">
+                                            <Border Classes="queueItem" Margin="0,0,0,10">
+                                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                                    <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Top"
+                                                            Background="{Binding AccentBrush}" />
+                                                    <StackPanel Grid.Column="1">
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                        <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Status}" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="sectionTitle" Text="Bridge Command Preview" />
+                                    <Button x:Name="PreviewMenuButton" Grid.Column="1" Classes="secondary" Click="OnPreviewMenuClick" Content="Preview Menu" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding CommandPreview}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Margin="0,0,0,8" FontFamily="Cascadia Code,Consolas,monospace" Text="{Binding .}" TextWrapping="Wrap" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</Window>

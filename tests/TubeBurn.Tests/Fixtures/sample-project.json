@@ -1,0 +1,39 @@
+{
+  "name": "Fixture Project",
+  "settings": {
+    "standard": "Ntsc",
+    "mediaKind": "Dvd5",
+    "writeSpeed": 8,
+    "outputDirectory": "C:\\temp\\fixture-output",
+    "preferExternalAuthoring": true,
+    "externalAuthoringToolPath": null,
+    "isoBuilderToolPath": null
+  },
+  "channels": [
+    {
+      "name": "Demo Channel",
+      "bannerImagePath": "banner.jpg",
+      "avatarImagePath": "avatar.jpg",
+      "videos": [
+        {
+          "url": "https://example.com/video-1",
+          "title": "Episode 1",
+          "thumbnailPath": "thumb-1.jpg",
+          "duration": "00:24:00",
+          "sourcePath": "episode-1.mp4",
+          "transcodedPath": "episode-1.mpg",
+          "estimatedSizeBytes": 1200000000
+        },
+        {
+          "url": "https://example.com/video-2",
+          "title": "Episode 2",
+          "thumbnailPath": "thumb-2.jpg",
+          "duration": "00:21:00",
+          "sourcePath": "episode-2.mp4",
+          "transcodedPath": "episode-2.mpg",
+          "estimatedSizeBytes": 900000000
+        }
+      ]
+    }
+  ]
+}
