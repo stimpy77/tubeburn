@@ -24,6 +24,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _selectedVideoStandard = "NTSC";
     private string _selectedDiscType = "DVD-5";
     private string _selectedWriteSpeed = "8x";
+    private string _selectedVideoBitrate = "Max (~6 Mbps)";
+    private int _baselineBitrateKbps = 6000;
     private string _buildStatus = "Ready";
     private string _currentStage = "Idle";
     private string _selectedBackend = "ExternalBridge";
@@ -51,6 +53,7 @@ public sealed class MainWindowViewModel : ObservableObject
         DiscTypes = new ReadOnlyCollection<string>(new List<string> { "DVD-5", "DVD-9" });
         WriteSpeeds = new ReadOnlyCollection<string>(new List<string> { "1x", "2x", "3x", "4x", "8x", "12x", "16x" });
         AvailableBackends = new ReadOnlyCollection<string>(new List<string> { "NativePort", "ExternalBridge" });
+        VideoBitrates = new ReadOnlyCollection<string>(new List<string> { "Max (~6 Mbps)", "~5 Mbps", "~4 Mbps", "~3 Mbps", "~2 Mbps" });
 
         Metrics = new ObservableCollection<MetricTile>();
         Queue = new ObservableCollection<QueuedVideoItem>();
@@ -116,6 +119,19 @@ public sealed class MainWindowViewModel : ObservableObject
     {
         get => _selectedWriteSpeed;
         set => SetProperty(ref _selectedWriteSpeed, value);
+    }
+
+    public string SelectedVideoBitrate
+    {
+        get => _selectedVideoBitrate;
+        set
+        {
+            if (SetProperty(ref _selectedVideoBitrate, value))
+            {
+                RecalculateEstimatedSizes();
+                RefreshMetrics();
+            }
+        }
     }
 
     public string BuildStatus
@@ -251,6 +267,8 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public ReadOnlyCollection<string> AvailableBackends { get; }
 
+    public ReadOnlyCollection<string> VideoBitrates { get; }
+
     public ObservableCollection<MetricTile> Metrics { get; }
 
     public ObservableCollection<QueuedVideoItem> Queue { get; }
@@ -314,11 +332,12 @@ public sealed class MainWindowViewModel : ObservableObject
                     Channel = NormalizeChannel(uri.Host),
                     Duration = "--:--",
                     Status = "Queued",
-                    Detail = "Waiting for yt-dlp and ffmpeg integration.",
+                    Detail = "Fetching metadata...",
                     Progress = 0,
                     SourcePath = sourcePath,
                     TranscodedPath = transcodedPath,
-                    EstimatedSizeBytes = 900_000_000,
+                    EstimatedSizeBytes = 0,
+                    IsEstimating = true,
                 });
 
             added++;
@@ -349,6 +368,8 @@ public sealed class MainWindowViewModel : ObservableObject
         SelectedVideoStandard = project.Settings.Standard == VideoStandard.Ntsc ? "NTSC" : "PAL";
         SelectedDiscType = project.Settings.MediaKind == DiscMediaKind.Dvd5 ? "DVD-5" : "DVD-9";
         SelectedWriteSpeed = $"{project.Settings.WriteSpeed}x";
+        _baselineBitrateKbps = project.Settings.VideoBitrateKbps;
+        SelectedVideoBitrate = FormatVideoBitrate(project.Settings.VideoBitrateKbps);
         SelectedBackend = project.Settings.PreferExternalAuthoring ? "ExternalBridge" : "NativePort";
         YtDlpToolPath = project.Settings.YtDlpToolPath ?? string.Empty;
         FfmpegToolPath = project.Settings.FfmpegToolPath ?? string.Empty;
@@ -372,6 +393,10 @@ public sealed class MainWindowViewModel : ObservableObject
                 var mediaBaseName = EnsureUniqueSlug(CreateMediaBaseName(uri, video.Url), usedNames);
                 usedNames.Add(mediaBaseName);
 
+                var transcodedPath = Path.Combine(OutputFolder, "transcoded", $"{mediaBaseName}.mpg");
+                var hasTranscoded = File.Exists(transcodedPath);
+                var hasDuration = video.Duration > TimeSpan.Zero;
+
                 Queue.Add(
                     new QueuedVideoItem
                     {
@@ -380,11 +405,14 @@ public sealed class MainWindowViewModel : ObservableObject
                         Channel = channel.Name,
                         Duration = video.Duration == TimeSpan.Zero ? "--:--" : video.Duration.ToString(@"hh\:mm\:ss"),
                         Status = "Queued",
-                        Detail = "Loaded from project file.",
+                        Detail = hasTranscoded ? "Loaded from project file." : (hasDuration ? "Loaded from project file." : "Fetching metadata..."),
                         Progress = 0,
                         SourcePath = Path.Combine(OutputFolder, "downloads", $"{mediaBaseName}.mp4"),
-                        TranscodedPath = Path.Combine(OutputFolder, "transcoded", $"{mediaBaseName}.mpg"),
-                        EstimatedSizeBytes = video.EstimatedSizeBytes,
+                        TranscodedPath = transcodedPath,
+                        EstimatedSizeBytes = hasTranscoded
+                            ? new FileInfo(transcodedPath).Length
+                            : (hasDuration ? video.EstimatedSizeBytes : 0),
+                        IsEstimating = !hasTranscoded && !hasDuration,
                     });
             }
         }
@@ -407,6 +435,7 @@ public sealed class MainWindowViewModel : ObservableObject
             ParseMediaKind(SelectedDiscType),
             ParseWriteSpeed(SelectedWriteSpeed),
             OutputFolder,
+            VideoBitrateKbps: ParseVideoBitrate(SelectedVideoBitrate),
             PreferExternalAuthoring: string.Equals(SelectedBackend, "ExternalBridge", StringComparison.OrdinalIgnoreCase),
             YtDlpToolPath: NormalizeToolPath(YtDlpToolPath),
             FfmpegToolPath: NormalizeToolPath(FfmpegToolPath),
@@ -487,6 +516,32 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public void SetPipelineStageState(string stageName, string state) => SetStage(stageName, state);
 
+    public void ApplyResolvedMetadata(string url, string? title, string? channel, int? durationSeconds)
+    {
+        var item = Queue.FirstOrDefault(candidate => string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase));
+        if (item is null) return;
+
+        if (!string.IsNullOrWhiteSpace(title))
+            item.Title = title;
+        if (!string.IsNullOrWhiteSpace(channel))
+            item.Channel = channel;
+        if (durationSeconds is > 0)
+        {
+            item.Duration = TimeSpan.FromSeconds(durationSeconds.Value).ToString(@"hh\:mm\:ss");
+
+            // Only recalculate if the item was still estimating (no actual file on disk).
+            // Items with transcoded files already have accurate sizes.
+            if (item.IsEstimating)
+            {
+                item.EstimatedSizeBytes = EstimateSizeFromBitrate(ParseVideoBitrate(SelectedVideoBitrate), durationSeconds.Value);
+                item.IsEstimating = false;
+                item.Detail = "Metadata resolved.";
+            }
+        }
+
+        RefreshMetrics();
+    }
+
     public void UpdateQueueItemProgress(string url, string status, string detail, double progress)
     {
         var item = Queue.FirstOrDefault(candidate => string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase));
@@ -510,8 +565,52 @@ public sealed class MainWindowViewModel : ObservableObject
     /// <summary>
     /// Updates each queue item's EstimatedSizeBytes from the actual transcoded file on disk.
     /// </summary>
+    private void RecalculateEstimatedSizes()
+    {
+        var newBitrateKbps = ParseVideoBitrate(SelectedVideoBitrate);
+
+        foreach (var item in Queue)
+        {
+            // Don't touch items still waiting for metadata — they'll get sized when metadata arrives.
+            if (item.IsEstimating)
+                continue;
+
+            if (newBitrateKbps == _baselineBitrateKbps && File.Exists(item.TranscodedPath))
+            {
+                // Bitrate matches what produced the on-disk files — use actual size.
+                item.EstimatedSizeBytes = new FileInfo(item.TranscodedPath).Length;
+            }
+            else if (_baselineBitrateKbps > 0 && File.Exists(item.TranscodedPath))
+            {
+                // Scale proportionally from the actual file size at the baseline bitrate.
+                var actualSize = new FileInfo(item.TranscodedPath).Length;
+                var ratio = (double)(newBitrateKbps + 250) / (_baselineBitrateKbps + 250);
+                item.EstimatedSizeBytes = (long)(actualSize * ratio);
+            }
+            else
+            {
+                // No transcoded file — estimate from bitrate + duration.
+                var durationSeconds = ParseDuration(item.Duration) is { TotalSeconds: > 0 } d
+                    ? (int)d.TotalSeconds
+                    : 600;
+                item.EstimatedSizeBytes = EstimateSizeFromBitrate(newBitrateKbps, durationSeconds);
+            }
+        }
+    }
+
+    public void RefreshItemSizeFromDisk(string url)
+    {
+        var item = Queue.FirstOrDefault(candidate => string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase));
+        if (item is not null && File.Exists(item.TranscodedPath))
+        {
+            item.EstimatedSizeBytes = new FileInfo(item.TranscodedPath).Length;
+            RefreshMetrics();
+        }
+    }
+
     public void RefreshEstimatedSizesFromDisk()
     {
+        _baselineBitrateKbps = ParseVideoBitrate(SelectedVideoBitrate);
         foreach (var item in Queue)
         {
             if (File.Exists(item.TranscodedPath))
@@ -889,7 +988,7 @@ public sealed class MainWindowViewModel : ObservableObject
         for (var i = 0; i < PipelineStages.Count; i++)
         {
             var stage = PipelineStages[i];
-            if (stage.CleanupFolder is null)
+            if (stage.CleanupFolder is null || !Directory.Exists(stage.CleanupFolder))
             {
                 stage.IsCleanupEnabled = false;
                 continue;
@@ -933,6 +1032,8 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             AddRecentActivity($"Cleanup failed for {stage.Name}: {ex.Message}");
         }
+
+        RefreshCleanupStates();
     }
 
     private void SetStageRetryAvailable(string stageName, bool available)
@@ -944,19 +1045,89 @@ public sealed class MainWindowViewModel : ObservableObject
         }
     }
 
+    private static readonly SolidColorBrush WarningBrush = new(Color.Parse("#F59E0B"));
+    private static readonly SolidColorBrush DangerBrush = new(Color.Parse("#EF4444"));
+
+    private const string DiscUsageTooltip =
+        "Disc Usage estimates total size based on video bitrate and duration.\n\n" +
+        "To reduce size:\n" +
+        "  - Lower the Video Bitrate in Project Settings (trades quality for space)\n" +
+        "  - Remove videos from the queue\n" +
+        "  - Switch to DVD-9 (dual layer, 7.95 GB)\n\n" +
+        "Lower bitrates (3-4 Mbps) are still DVD-quality for most content.\n" +
+        "Below 2 Mbps, compression artifacts become noticeable.";
+
+    public void RefreshMetricsPublic() => RefreshMetrics();
+
     private void RefreshMetrics()
     {
-        Metrics.Clear();
-
+        var anyEstimating = Queue.Any(item => item.IsEstimating);
         var totalBytes = Queue.Sum(item => item.EstimatedSizeBytes);
         var discCapacity = SelectedDiscType == "DVD-9" ? 8_540_000_000d : 4_700_000_000d;
         var usageRatio = discCapacity == 0 ? 0 : totalBytes / discCapacity;
-        var channels = Queue.Select(item => item.Channel).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        // Only count channels from resolved items to avoid flicker during metadata fetch.
+        var resolvedItems = anyEstimating
+            ? Queue.Where(item => !item.IsEstimating)
+            : Queue;
+        var channels = resolvedItems.Select(item => item.Channel).Distinct(StringComparer.OrdinalIgnoreCase).Count();
 
-        Metrics.Add(new MetricTile("Queued Videos", Queue.Count.ToString(), Queue.Count == 0 ? "Add URLs to begin" : "Ready for workflow"));
-        Metrics.Add(new MetricTile("Channels", channels.ToString(), "Menu grouping source"));
-        Metrics.Add(new MetricTile("Disc Usage", $"{totalBytes / 1_000_000_000d:0.00} GB", $"{usageRatio:P0} of {SelectedDiscType} target"));
-        Metrics.Add(new MetricTile("Backend", SelectedBackend, "Native-first authoring flow"));
+        string discValue;
+        string discDetail;
+        string? discWarning = null;
+        IBrush? discValueBrush = null;
+
+        if (anyEstimating)
+        {
+            var resolved = Queue.Count(item => !item.IsEstimating);
+            discValue = "Estimating...";
+            discDetail = $"{resolved}/{Queue.Count} videos resolved";
+            discValueBrush = _pendingBrush;
+        }
+        else
+        {
+            var hasActualFiles = Queue.Any(item => File.Exists(item.TranscodedPath));
+            discValue = hasActualFiles
+                ? $"{totalBytes / 1_000_000_000d:0.00} GB"
+                : $"~{totalBytes / 1_000_000_000d:0.0} GB";
+            discDetail = hasActualFiles
+                ? $"{usageRatio:P0} of {SelectedDiscType} target"
+                : $"~{usageRatio:P0} of {SelectedDiscType} (estimate)";
+            if (usageRatio > 1.0)
+            {
+                discWarning = "Over capacity. Remove items or lower bitrate.";
+                discValueBrush = DangerBrush;
+            }
+            else if (usageRatio > 0.9)
+            {
+                discWarning = "Near capacity. Consider lowering bitrate.";
+                discValueBrush = WarningBrush;
+            }
+        }
+
+        if (Metrics.Count == 4)
+        {
+            // Update existing tiles in-place to avoid UI flicker from Clear+Add.
+            Metrics[0].Value = Queue.Count.ToString();
+            Metrics[0].Detail = Queue.Count == 0 ? "Add URLs to begin" : "Ready for workflow";
+            Metrics[1].Value = channels.ToString();
+            Metrics[2].Value = discValue;
+            Metrics[2].Detail = discDetail;
+            Metrics[2].Warning = discWarning;
+            Metrics[2].ValueBrush = discValueBrush;
+            Metrics[2].IsEstimating = anyEstimating;
+            Metrics[3].Value = SelectedBackend;
+        }
+        else
+        {
+            Metrics.Clear();
+            Metrics.Add(new MetricTile("Queued Videos", Queue.Count.ToString(), Queue.Count == 0 ? "Add URLs to begin" : "Ready for workflow"));
+            Metrics.Add(new MetricTile("Channels", channels.ToString(), "Menu grouping source"));
+            var discTile = new MetricTile("Disc Usage", discValue, discDetail,
+                warning: discWarning, valueBrush: discValueBrush, tooltip: DiscUsageTooltip);
+            discTile.IsEstimating = anyEstimating;
+            Metrics.Add(discTile);
+            Metrics.Add(new MetricTile("Backend", SelectedBackend, "Native-first authoring flow"));
+        }
 
         OnPropertyChanged(nameof(ProjectSummary));
     }
@@ -1002,6 +1173,37 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private static int ParseWriteSpeed(string value) =>
         int.TryParse(value.TrimEnd('x', 'X'), out var speed) ? speed : 8;
+
+    internal static int ParseVideoBitrate(string value) => value switch
+    {
+        "~5 Mbps" => 5000,
+        "~4 Mbps" => 4000,
+        "~3 Mbps" => 3000,
+        "~2 Mbps" => 2000,
+        _ => 6000,
+    };
+
+    private static string FormatVideoBitrate(int kbps) => kbps switch
+    {
+        5000 => "~5 Mbps",
+        4000 => "~4 Mbps",
+        3000 => "~3 Mbps",
+        2000 => "~2 Mbps",
+        _ => "Max (~6 Mbps)",
+    };
+
+    /// <summary>
+    /// Estimate transcoded file size from target bitrate and duration.
+    /// DVD MPEG-2 with capped maxrate typically averages ~85% of target due to
+    /// VBR efficiency on low-complexity frames. Audio is 192 kbps AC3 + overhead.
+    /// </summary>
+    internal static long EstimateSizeFromBitrate(int videoBitrateKbps, int durationSeconds = 600)
+    {
+        const double vbrEfficiency = 0.85;
+        var videoBytesPerSec = (long)(videoBitrateKbps * 1000 / 8 * vbrEfficiency);
+        var overheadBytesPerSec = 250L * 1000 / 8;
+        return (videoBytesPerSec + overheadBytesPerSec) * durationSeconds;
+    }
 
     private static TimeSpan ParseDuration(string duration) =>
         TimeSpan.TryParse(duration, out var parsed) ? parsed : TimeSpan.Zero;
@@ -1129,18 +1331,77 @@ public sealed class MainWindowViewModel : ObservableObject
 
 public sealed class MetricTile : ObservableObject
 {
-    public MetricTile(string label, string value, string detail)
+    private string _label = string.Empty;
+    private string _value = string.Empty;
+    private string _detail = string.Empty;
+    private string? _warning;
+    private IBrush? _valueBrush;
+    private string? _tooltip;
+    private bool _isEstimating;
+
+    public MetricTile(string label, string value, string detail, string? warning = null, IBrush? valueBrush = null, string? tooltip = null)
     {
-        Label = label;
-        Value = value;
-        Detail = detail;
+        _label = label;
+        _value = value;
+        _detail = detail;
+        _warning = warning;
+        _valueBrush = valueBrush;
+        _tooltip = tooltip;
     }
 
-    public string Label { get; }
+    public string Label
+    {
+        get => _label;
+        set => SetProperty(ref _label, value);
+    }
 
-    public string Value { get; }
+    public string Value
+    {
+        get => _value;
+        set => SetProperty(ref _value, value);
+    }
 
-    public string Detail { get; }
+    public string Detail
+    {
+        get => _detail;
+        set => SetProperty(ref _detail, value);
+    }
+
+    public string? Warning
+    {
+        get => _warning;
+        set
+        {
+            if (SetProperty(ref _warning, value))
+                OnPropertyChanged(nameof(HasWarning));
+        }
+    }
+
+    public bool HasWarning => Warning is not null;
+
+    public IBrush? ValueBrush
+    {
+        get => _valueBrush;
+        set => SetProperty(ref _valueBrush, value);
+    }
+
+    public string? Tooltip
+    {
+        get => _tooltip;
+        set
+        {
+            if (SetProperty(ref _tooltip, value))
+                OnPropertyChanged(nameof(HasTooltip));
+        }
+    }
+
+    public bool HasTooltip => Tooltip is not null;
+
+    public bool IsEstimating
+    {
+        get => _isEstimating;
+        set => SetProperty(ref _isEstimating, value);
+    }
 }
 
 public sealed class QueuedVideoItem : ObservableObject
@@ -1153,8 +1414,15 @@ public sealed class QueuedVideoItem : ObservableObject
     private double _progress;
     private string _sourcePath = string.Empty;
     private string _transcodedPath = string.Empty;
+    private bool _isEstimating;
 
     public string Url { get; init; } = string.Empty;
+
+    public bool IsEstimating
+    {
+        get => _isEstimating;
+        set => SetProperty(ref _isEstimating, value);
+    }
 
     public string Title
     {

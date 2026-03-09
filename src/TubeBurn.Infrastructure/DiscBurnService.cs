@@ -307,7 +307,7 @@ public sealed class DiscBurnService
                 // spinning up, seeking, or reading the disc TOC when we reach this
                 // point.  Poll IsCurrentMediaSupported with back-off so the initial
                 // write commands don't hit a "device not ready" SCSI error.
-                WaitForDriveReady(dataWriter, recorder, maxWaitSeconds: 30);
+                WaitForDriveReady(dataWriter, recorder, maxWaitSeconds: 90);
 
                 var mediaSupport = TryDescribeCurrentMediaSupport(dataWriter, recorder);
                 if (mediaSupport is not null)

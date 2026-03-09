@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using TubeBurn.App.ViewModels;
@@ -24,6 +25,7 @@ public partial class MainWindow : Window
     private bool _shouldRestoreMainScrollOffset;
     private string? _pendingBurnRetryWorkingDirectory;
     private string? _pendingBurnRetrySignature;
+    private CancellationTokenSource? _buildCts;
 
     public MainWindow()
     {
@@ -85,9 +87,14 @@ public partial class MainWindow : Window
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync();
         ViewModel.ImportUrlsFromText(content);
+        _ = FetchMetadataForEstimatingItemsAsync();
     }
 
-    private void OnAddUrlsClick(object? sender, RoutedEventArgs e) => ViewModel.AddPendingUrlsToQueue();
+    private void OnAddUrlsClick(object? sender, RoutedEventArgs e)
+    {
+        ViewModel.AddPendingUrlsToQueue();
+        _ = FetchMetadataForEstimatingItemsAsync();
+    }
 
     private async void OnChooseOutputFolderClick(object? sender, RoutedEventArgs e)
     {
@@ -158,10 +165,15 @@ public partial class MainWindow : Window
 
     private void OnWindowDragStripPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            BeginMoveDrag(e);
-        }
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            return;
+
+        // Don't drag when clicking on interactive controls.
+        if (e.Source is Control source &&
+            source.GetLogicalAncestors().Any(a => a is Button or ComboBox or TextBox or CheckBox))
+            return;
+
+        BeginMoveDrag(e);
     }
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
@@ -289,6 +301,14 @@ public partial class MainWindow : Window
         ViewModel.RefreshEstimatedSizesFromDisk();
         ClearPendingBurnRetryContext();
         AppLog.Info($"Project loaded: {path}");
+        _ = FetchMetadataForEstimatingItemsAsync();
+    }
+
+    private void OnStopBuildClick(object? sender, RoutedEventArgs e)
+    {
+        _buildCts?.Cancel();
+        AppLog.Info("Build stop requested by user.");
+        ViewModel.AddRecentActivity("Build stop requested.");
     }
 
     private async void OnBuildAndBurnClick(object? sender, RoutedEventArgs e)
@@ -308,9 +328,10 @@ public partial class MainWindow : Window
         var discLabel = project.Settings.MediaKind == DiscMediaKind.Dvd9 ? "DVD-9" : "DVD-5";
         if (estimatedBytes > capacityBytes)
         {
-            ViewModel.MarkOverCapacityBlocked(estimatedBytes, capacityBytes, discLabel);
-            AppLog.Warn($"Build blocked: over capacity. Estimated={estimatedBytes}, Capacity={capacityBytes}, Disc={discLabel}.");
-            return;
+            // Pre-build estimate may be inaccurate — warn but don't block.
+            // The post-transcode check with actual file sizes is the real gate.
+            AppLog.Warn($"Pre-build estimate over capacity ({estimatedBytes / 1_000_000_000d:0.00} GB > {capacityBytes / 1_000_000_000d:0.00} GB). Proceeding — will re-check after transcode.");
+            ViewModel.AddRecentActivity($"Estimate near/over {discLabel} capacity — will verify after transcode.");
         }
 
         var toolStatuses = _toolDiscoveryService.Discover(project.Settings);
@@ -323,6 +344,10 @@ public partial class MainWindow : Window
             await ExecuteBurnStageAsync(project, retryWorkingDirectory, markBurnStageStarted: false);
             return;
         }
+
+        _buildCts?.Dispose();
+        _buildCts = new CancellationTokenSource();
+        var cancellationToken = _buildCts.Token;
 
         ViewModel.BeginBuild();
         AppLog.Info("Build started. Tool discovery completed.");
@@ -349,7 +374,7 @@ public partial class MainWindow : Window
                     project,
                     workingDirectory,
                     progress => Dispatcher.UIThread.Post(() => ApplyMediaProgress(progress)),
-                    CancellationToken.None);
+                    cancellationToken);
 
                 if (!mediaResult.Succeeded)
                 {
@@ -407,7 +432,7 @@ public partial class MainWindow : Window
             }
 
             var backend = _backendSelector.Select(project.Settings);
-            var result = await backend.AuthorAsync(new DvdBuildRequest(project, workingDirectory), CancellationToken.None);
+            var result = await backend.AuthorAsync(new DvdBuildRequest(project, workingDirectory), cancellationToken);
             ViewModel.ApplyBuildResult(result, workingDirectory);
             if (result.Status is AuthoringResultStatus.Failed or AuthoringResultStatus.Planned)
             {
@@ -428,10 +453,20 @@ public partial class MainWindow : Window
                 AppLog.Info("Build completed. Burn stage skipped by user toggle.");
             }
         }
+        catch (OperationCanceledException)
+        {
+            ViewModel.EndBusy("Build stopped by user.");
+            AppLog.Info("Build stopped by user.");
+        }
         catch (Exception ex)
         {
             ViewModel.EndBusy($"Build failed: {ex.Message}");
             AppLog.Error("Build flow threw an exception.", ex);
+        }
+        finally
+        {
+            _buildCts?.Dispose();
+            _buildCts = null;
         }
     }
 
@@ -443,7 +478,8 @@ public partial class MainWindow : Window
             AppLog.Info("Burn stage started.");
         }
 
-        var burnResult = await _discBurnService.BurnAsync(workingDirectory, project.Settings, CancellationToken.None);
+        var burnCt = _buildCts?.Token ?? CancellationToken.None;
+        var burnResult = await _discBurnService.BurnAsync(workingDirectory, project.Settings, burnCt);
         ViewModel.ApplyBurnResult(burnResult);
         AppLog.Info($"Burn stage outcome {burnResult.Outcome}: {burnResult.Summary}");
 
@@ -641,6 +677,77 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task FetchMetadataForEstimatingItemsAsync()
+    {
+        var estimatingItems = ViewModel.Queue.Where(item => item.IsEstimating).ToList();
+        if (estimatingItems.Count == 0)
+            return;
+
+        var ytDlpResolution = ExternalToolPathResolver.Resolve("yt-dlp", ViewModel.YtDlpToolPath);
+        if (ytDlpResolution.ResolvedPath is not { } ytDlp)
+        {
+            AppLog.Warn("Cannot fetch metadata: yt-dlp not found. Size estimates will use defaults.");
+            // Fall back to formula estimates so the UI isn't stuck on "Estimating..."
+            foreach (var item in estimatingItems)
+            {
+                item.EstimatedSizeBytes = MainWindowViewModel.EstimateSizeFromBitrate(
+                    MainWindowViewModel.ParseVideoBitrate(ViewModel.SelectedVideoBitrate));
+                item.IsEstimating = false;
+                item.Detail = "Estimated (yt-dlp unavailable).";
+            }
+            ViewModel.RefreshMetricsPublic();
+            return;
+        }
+
+        var toolRunner = new ProcessExternalToolRunner();
+        var workingDir = string.IsNullOrWhiteSpace(ViewModel.OutputFolder)
+            ? Path.GetTempPath()
+            : ViewModel.OutputFolder;
+
+        foreach (var item in estimatingItems)
+        {
+            try
+            {
+                var args = new List<string> { "--no-playlist", "--dump-json", "--no-download", item.Url };
+                var result = await toolRunner.RunAsync(ytDlp, args, workingDir, CancellationToken.None);
+                if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
+                {
+                    var (title, channel, durationSec) = MediaPipelineService.ParseYtDlpMetadata(result.StandardOutput);
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        ViewModel.ApplyResolvedMetadata(item.Url, title, channel, durationSec);
+                    });
+                }
+                else
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        // Couldn't fetch metadata — use formula estimate so we're not stuck.
+                        item.EstimatedSizeBytes = MainWindowViewModel.EstimateSizeFromBitrate(
+                            MainWindowViewModel.ParseVideoBitrate(ViewModel.SelectedVideoBitrate));
+                        item.IsEstimating = false;
+                        item.Detail = "Estimated (metadata unavailable).";
+                        ViewModel.RefreshMetricsPublic();
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"Metadata fetch failed for {item.Url}: {ex.Message}");
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    item.EstimatedSizeBytes = MainWindowViewModel.EstimateSizeFromBitrate(
+                        MainWindowViewModel.ParseVideoBitrate(ViewModel.SelectedVideoBitrate));
+                    item.IsEstimating = false;
+                    item.Detail = "Estimated (metadata fetch failed).";
+                    ViewModel.RefreshMetricsPublic();
+                });
+            }
+        }
+
+        AppLog.Info($"Metadata fetch complete for {estimatingItems.Count} item(s).");
+    }
+
     private void ApplyMediaProgress(MediaPipelineProgress progress)
     {
         if (progress.Stage is "Download")
@@ -658,6 +765,18 @@ public partial class MainWindow : Window
         else if (progress.Stage is "Transcode")
         {
             ViewModel.SetPipelineStageState("Transcode", progress.Status);
+        }
+
+        // Update queue item with resolved metadata from yt-dlp.
+        if (progress.ResolvedTitle is not null || progress.ResolvedChannel is not null || progress.DurationSeconds is not null)
+        {
+            ViewModel.ApplyResolvedMetadata(progress.Url, progress.ResolvedTitle, progress.ResolvedChannel, progress.DurationSeconds);
+        }
+
+        // When a transcode completes for a specific video, update its size from the actual file.
+        if (progress.Stage is "Transcode" && progress.Status is "Done" && !string.IsNullOrWhiteSpace(progress.Url))
+        {
+            ViewModel.RefreshItemSizeFromDisk(progress.Url);
         }
 
         ViewModel.UpdateQueueItemProgress(progress.Url, progress.Status, progress.Detail, progress.ItemProgress);

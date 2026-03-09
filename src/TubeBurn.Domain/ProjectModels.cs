@@ -19,6 +19,7 @@ public sealed record ProjectSettings(
     DiscMediaKind MediaKind,
     int WriteSpeed,
     string OutputDirectory,
+    int VideoBitrateKbps = 6000,
     bool PreferExternalAuthoring = true,
     string? YtDlpToolPath = null,
     string? FfmpegToolPath = null,

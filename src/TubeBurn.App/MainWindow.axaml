@@ -113,7 +113,11 @@
                             </WrapPanel>
                             <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
                                 <Button x:Name="BuildAndBurnButton" Classes="primary" Click="OnBuildAndBurnClick"
-                                        Content="{Binding BurnEnabled, Converter={x:Static viewModels:BurnButtonLabelConverter.Instance}}" />
+                                        Content="{Binding BurnEnabled, Converter={x:Static viewModels:BurnButtonLabelConverter.Instance}}"
+                                        IsVisible="{Binding !IsBusy}" />
+                                <Button x:Name="StopBuildButton" Classes="primary" Click="OnStopBuildClick"
+                                        Content="Stop" IsVisible="{Binding IsBusy}"
+                                        Background="#EF4444" />
                                 <CheckBox IsChecked="{Binding BurnEnabled}" Content="Burn to disc" VerticalAlignment="Center" />
                                 <Button x:Name="DiscoverToolsButton" Classes="secondary" Click="OnDiscoverToolsClick" Content="Discover Tools" />
                                 <Button x:Name="SaveProjectButton" Classes="secondary" Click="OnSaveProjectClick" Content="Save Project" />
@@ -147,9 +151,38 @@
                         <DataTemplate x:DataType="viewModels:MetricTile">
                             <Border Classes="metricCard" Margin="0,0,12,0">
                                 <StackPanel Spacing="6">
-                                    <TextBlock Classes="eyebrow" Text="{Binding Label}" />
-                                    <TextBlock FontSize="28" FontWeight="Bold" Text="{Binding Value}" />
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Classes="eyebrow" Text="{Binding Label}" />
+                                        <TextBlock Grid.Column="1" Text="&#x24D8;"
+                                                   FontSize="14" Opacity="0.5"
+                                                   VerticalAlignment="Center"
+                                                   IsVisible="{Binding HasTooltip}"
+                                                   ToolTip.Tip="{Binding Tooltip}" />
+                                    </Grid>
+                                    <TextBlock FontSize="28" FontWeight="Bold" Text="{Binding Value}"
+                                               Foreground="{Binding ValueBrush, FallbackValue=White, TargetNullValue=White}"
+                                               Classes.estimating="{Binding IsEstimating}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock.estimating">
+                                                <Style.Animations>
+                                                    <Animation Duration="0:0:1.5" IterationCount="INFINITE"
+                                                               PlaybackDirection="Alternate">
+                                                        <KeyFrame Cue="0%">
+                                                            <Setter Property="Opacity" Value="1.0" />
+                                                        </KeyFrame>
+                                                        <KeyFrame Cue="100%">
+                                                            <Setter Property="Opacity" Value="0.35" />
+                                                        </KeyFrame>
+                                                    </Animation>
+                                                </Style.Animations>
+                                            </Style>
+                                        </TextBlock.Styles>
+                                    </TextBlock>
                                     <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                    <TextBlock FontSize="11" TextWrapping="Wrap"
+                                               IsVisible="{Binding HasWarning}"
+                                               Foreground="{Binding ValueBrush}"
+                                               Text="{Binding Warning}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
@@ -235,23 +268,27 @@
                                         <ComboBox ItemsSource="{Binding DiscTypes}" SelectedItem="{Binding SelectedDiscType, Mode=TwoWay}" />
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="VIDEO BITRATE" />
+                                        <ComboBox ItemsSource="{Binding VideoBitrates}" SelectedItem="{Binding SelectedVideoBitrate, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="WRITE SPEED" />
                                         <ComboBox ItemsSource="{Binding WriteSpeeds}" SelectedItem="{Binding SelectedWriteSpeed, Mode=TwoWay}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="2" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="BACKEND" />
                                         <ComboBox ItemsSource="{Binding AvailableBackends}" SelectedItem="{Binding SelectedBackend, Mode=TwoWay}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="BURN DRIVE" />
+                                        <ComboBox ItemsSource="{Binding AvailableBurnDrives}" SelectedItem="{Binding SelectedBurnDrive, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="OUTPUT FOLDER" />
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                             <TextBox Text="{Binding OutputFolder, Mode=TwoWay}" />
                                             <Button x:Name="BrowseOutputFolderButton" Grid.Column="1" Classes="secondary" Click="OnChooseOutputFolderClick" Content="Browse" />
                                         </Grid>
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
-                                        <TextBlock Classes="eyebrow" Text="BURN DRIVE" />
-                                        <ComboBox ItemsSource="{Binding AvailableBurnDrives}" SelectedItem="{Binding SelectedBurnDrive, Mode=TwoWay}" />
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

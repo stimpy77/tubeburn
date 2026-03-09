@@ -11,7 +11,10 @@ public sealed record MediaPipelineProgress(
     string Status,
     string Detail,
     double ItemProgress,
-    double OverallProgress);
+    double OverallProgress,
+    string? ResolvedTitle = null,
+    string? ResolvedChannel = null,
+    int? DurationSeconds = null);
 
 public sealed record MediaPipelineResult(
     bool Succeeded,
@@ -66,16 +69,49 @@ public sealed class MediaPipelineService
         {
             var sourcePath = video.SourcePath;
             var downloadDirectory = Path.GetDirectoryName(sourcePath);
-            var transcodeDirectory = Path.GetDirectoryName(video.TranscodedPath);
+            var videoTranscodeDir = Path.GetDirectoryName(video.TranscodedPath);
 
             if (!string.IsNullOrWhiteSpace(downloadDirectory))
             {
                 Directory.CreateDirectory(downloadDirectory);
             }
 
-            if (!string.IsNullOrWhiteSpace(transcodeDirectory))
+            if (!string.IsNullOrWhiteSpace(videoTranscodeDir))
             {
-                Directory.CreateDirectory(transcodeDirectory);
+                Directory.CreateDirectory(videoTranscodeDir);
+            }
+
+            // Fetch metadata (title, channel, duration) via yt-dlp --dump-json.
+            {
+                onProgress?.Invoke(
+                    new MediaPipelineProgress(
+                        video.Url,
+                        "Download",
+                        "Active",
+                        "Fetching video metadata.",
+                        5,
+                        PhasePercentage(downloadedCount, totalCount, 0.05, phaseStart: 0, phaseSpan: 35)));
+
+                var metadataArgs = new List<string> { "--no-playlist", "--dump-json", "--no-download", video.Url };
+                var metadataResult = await _toolRunner.RunAsync(ytDlp, metadataArgs, workingDirectory, cancellationToken);
+                if (metadataResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(metadataResult.StandardOutput))
+                {
+                    var (title, channel, durationSec) = ParseYtDlpMetadata(metadataResult.StandardOutput);
+                    if (title is not null || channel is not null || durationSec is not null)
+                    {
+                        onProgress?.Invoke(
+                            new MediaPipelineProgress(
+                                video.Url,
+                                "Download",
+                                "Active",
+                                $"Metadata resolved: {title ?? video.Title}",
+                                8,
+                                PhasePercentage(downloadedCount, totalCount, 0.08, phaseStart: 0, phaseSpan: 35),
+                                ResolvedTitle: title,
+                                ResolvedChannel: channel,
+                                DurationSeconds: durationSec));
+                    }
+                }
             }
 
             if (!File.Exists(sourcePath))
@@ -148,11 +184,22 @@ public sealed class MediaPipelineService
                 0,
                 35));
 
+        var transcodeDirectory = Path.GetDirectoryName(allVideos[0].TranscodedPath) ?? workingDirectory;
+        var manifest = TranscodeManifest.Load(transcodeDirectory);
+        var bitrateKbps = project.Settings.VideoBitrateKbps;
+
         foreach (var video in allVideos)
         {
             var sourcePath = resolvedSourcePaths[video];
-            if (!File.Exists(video.TranscodedPath))
+            if (manifest.IsCacheValid(video.TranscodedPath, video.Url, bitrateKbps))
             {
+                // Cached transcode matches current settings — skip.
+            }
+            else
+            {
+                // Delete stale cached file if it exists at a different bitrate.
+                if (File.Exists(video.TranscodedPath))
+                    File.Delete(video.TranscodedPath);
                 onProgress?.Invoke(
                     new MediaPipelineProgress(
                         video.Url,
@@ -163,7 +210,7 @@ public sealed class MediaPipelineService
                         PhasePercentage(transcodedCount, totalCount, 0.1, phaseStart: 35, phaseSpan: 65)));
 
                 var targetPreset = project.Settings.Standard == VideoStandard.Ntsc ? "ntsc-dvd" : "pal-dvd";
-                var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, useHardwareAcceleration: true);
+                var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: true);
 
                 var transcodeResult = await RunFfmpegWithProgressAsync(
                     ffmpeg,
@@ -177,7 +224,8 @@ public sealed class MediaPipelineService
 
                 if (transcodeResult.ExitCode != 0)
                 {
-                    var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, useHardwareAcceleration: false);
+                    var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: false);
+
                     transcodeResult = await RunFfmpegWithProgressAsync(
                         ffmpeg,
                         softwareArgs,
@@ -197,6 +245,8 @@ public sealed class MediaPipelineService
                         "Transcode",
                         video.Url);
                 }
+
+                manifest.RecordEntry(video.TranscodedPath, video.Url, bitrateKbps);
             }
 
             transcodedCount++;
@@ -210,6 +260,8 @@ public sealed class MediaPipelineService
                     PhasePercentage(transcodedCount, totalCount, 0, phaseStart: 35, phaseSpan: 65)));
         }
 
+        manifest.Save(transcodeDirectory);
+
         return new MediaPipelineResult(true, "Download and transcode preparation completed.");
     }
 
@@ -217,6 +269,34 @@ public sealed class MediaPipelineService
     {
         var value = phaseStart + (((complete + offsetWithinItem) / total) * phaseSpan);
         return Math.Clamp(value, 0, 100);
+    }
+
+    public static (string? Title, string? Channel, int? DurationSeconds) ParseYtDlpMetadata(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            string? title = null;
+            string? channel = null;
+            int? duration = null;
+
+            if (root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                title = titleProp.GetString();
+            if (root.TryGetProperty("channel", out var channelProp) && channelProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                channel = channelProp.GetString();
+            else if (root.TryGetProperty("uploader", out var uploaderProp) && uploaderProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                channel = uploaderProp.GetString();
+            if (root.TryGetProperty("duration", out var durationProp) && durationProp.TryGetInt32(out var dur))
+                duration = dur;
+
+            return (title, channel, duration);
+        }
+        catch
+        {
+            return (null, null, null);
+        }
     }
 
     private static string ExtractFailureReason(ExternalToolRunResult result)
@@ -242,6 +322,7 @@ public sealed class MediaPipelineService
         string sourcePath,
         string targetPreset,
         string outputPath,
+        int videoBitrateKbps,
         bool useHardwareAcceleration)
     {
         var arguments = new List<string>
@@ -265,7 +346,11 @@ public sealed class MediaPipelineService
         arguments.Add("-aspect");
         arguments.Add("16:9");
         arguments.Add("-b:v");
-        arguments.Add("6000k");
+        arguments.Add($"{videoBitrateKbps}k");
+        arguments.Add("-maxrate");
+        arguments.Add($"{videoBitrateKbps}k");
+        arguments.Add("-bufsize");
+        arguments.Add($"{videoBitrateKbps * 2}k");
         arguments.Add(outputPath);
         return arguments;
     }

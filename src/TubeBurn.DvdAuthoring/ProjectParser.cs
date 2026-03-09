@@ -37,9 +37,16 @@ public sealed class DvdProjectParser
         string MediaKind,
         int WriteSpeed,
         string OutputDirectory,
-        bool PreferExternalAuthoring,
-        string? ExternalAuthoringToolPath,
-        string? IsoBuilderToolPath)
+        int VideoBitrateKbps = 6000,
+        bool PreferExternalAuthoring = true,
+        string? YtDlpToolPath = null,
+        string? FfmpegToolPath = null,
+        string? ExternalAuthoringToolPath = null,
+        string? IsoBuilderToolPath = null,
+        string? GrowisofsToolPath = null,
+        string? ImgBurnToolPath = null,
+        string? VlcToolPath = null,
+        string? BurnDevice = null)
     {
         public ProjectSettings ToSettings() =>
             new(
@@ -47,9 +54,16 @@ public sealed class DvdProjectParser
                 Enum.Parse<DiscMediaKind>(MediaKind, ignoreCase: true),
                 WriteSpeed,
                 OutputDirectory,
-                PreferExternalAuthoring,
-                ExternalAuthoringToolPath,
-                IsoBuilderToolPath);
+                VideoBitrateKbps: VideoBitrateKbps,
+                PreferExternalAuthoring: PreferExternalAuthoring,
+                YtDlpToolPath: YtDlpToolPath,
+                FfmpegToolPath: FfmpegToolPath,
+                ExternalAuthoringToolPath: ExternalAuthoringToolPath,
+                IsoBuilderToolPath: IsoBuilderToolPath,
+                GrowisofsToolPath: GrowisofsToolPath,
+                ImgBurnToolPath: ImgBurnToolPath,
+                VlcToolPath: VlcToolPath,
+                BurnDevice: BurnDevice);
     }
 
     private sealed record ChannelDocument(
