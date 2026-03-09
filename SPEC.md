@@ -44,14 +44,17 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 ### Transcode Phase
 - Convert each video to DVD-compliant MPEG-2 PS using ffmpeg (bundled or system-installed):
   - Use `-hwaccel auto` for hardware-accelerated decoding of source video
-  - Video: MPEG-2, 720x480 (NTSC) or 720x576 (PAL), ~6 Mbps VBR
+  - Video: MPEG-2, 720x480 (NTSC) or 720x576 (PAL), user-selectable bitrate (6/5/4/3/2 Mbps)
   - Audio: AC3, 48kHz, 192kbps stereo
+  - Bitrate capping: `-target ntsc-dvd` sets an internal maxrate (~9800k) that overrides the `-b:v` target.
+    To actually constrain output, ffmpeg args must include explicit `-maxrate {bitrate}k -bufsize {bitrate*2}k`.
+    Example: `ffmpeg -hwaccel auto -i input.mp4 -target ntsc-dvd -aspect 16:9 -b:v 4000k -maxrate 4000k -bufsize 8000k -y output.mpg`
   - Aspect ratio: use anamorphic encoding, NOT square-pixel scaling with padding.
     For 16:9 sources: scale to 720x480 (NTSC) or 720x576 (PAL) anamorphic with `-aspect 16:9`.
     For 4:3 sources: scale to 720x480/576 with `-aspect 4:3`.
     Do NOT use `force_original_aspect_ratio` + `pad` + `setsar` — this double-applies AR correction
     and results in vertically squished output. Let `-target ntsc-dvd`/`-target pal-dvd` + `-aspect` handle it.
-    Example: `ffmpeg -hwaccel auto -i input.mp4 -target ntsc-dvd -aspect 16:9 -b:v 6000k -y output.mpg`
+- **TranscodeManifest**: JSON file at `{outputFolder}/transcoded/manifest.json` tracks each transcoded file's source URL and bitrate. Used for cache invalidation — a cached transcode is only reused if the URL and bitrate match. Entries are recorded after each successful transcode; manifest is saved after the transcode loop completes.
 - Parallelize with a configurable worker pool (default: one ffmpeg process per logical core, capped by user setting)
 - Include runtime throttling (CPU/temperature-aware optional cap) so desktop responsiveness is preserved
 - Show transcode progress per video
@@ -85,19 +88,22 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 - External authoring bridge (`ExternalAuthoringBridge`) available as fallback via dvdauthor + mkisofs
 
 ### Disc Capacity Validation
-- Calculate total disc usage before authoring/burning:
-  - Video bitrate (e.g., 6 Mbps) x duration per video = estimated video size
-  - Audio bitrate (192 kbps) x duration = audio size
-  - Menu VOBs: small (~5-20MB total)
-  - IFO/BUP overhead: negligible
-  - UDF/ISO filesystem overhead: ~1-2%
+- **Pre-build check** (warning only): Estimates total size before build starts. If over capacity, logs a warning and shows an activity message but does NOT block the build. Estimation is inherently approximate due to VBR.
+- **Post-transcode check** (hard gate): After all transcodes complete, re-validates with actual file sizes. This is the real capacity gate — blocks authoring if actual files exceed disc capacity.
+- **Estimation approach**:
+  - VBR efficiency factor: DVD MPEG-2 with `-maxrate` cap averages ~85% of target bitrate
+  - Formula: `(videoBitrate * 0.85 + 250kbps overhead) * duration`
+  - When transcoded files exist and bitrate matches baseline: use actual file size
+  - When bitrate differs from baseline: scale proportionally from actual file size
+  - When no files exist: formula estimate using duration (or 600s default)
+  - Estimates shown with tilde prefix (~) in the UI
+- **Progressive updates**: Disc usage recalculates as each transcode completes, using real file sizes
+- **Background metadata fetch**: When items are added to the queue, yt-dlp metadata (title, channel, duration) is fetched in the background before any build starts. Items show as "Estimating..." with a pulse animation until metadata resolves.
 - DVD-5 usable capacity: 4.37 GB (4,700,000,000 bytes)
 - DVD-9 usable capacity: 7.95 GB (8,540,000,000 bytes)
 - Show running total in the GUI as user adds videos
 - Warn when approaching capacity (>90%)
-- Block "Build & Burn" if total exceeds disc capacity
 - Suggest reducing bitrate or splitting across multiple discs if over capacity
-- After transcode, re-validate with actual file sizes (since VBR means estimates can be off)
 
 ### Burn Phase
 - Detect available DVD burners
@@ -277,6 +283,7 @@ tubeburn/
 
     TubeBurn.Infrastructure/         — external tool integration (class library)
       MediaPipelineService.cs        — yt-dlp download + ffmpeg transcode with progress
+      TranscodeManifest.cs           — JSON manifest for transcode cache invalidation
       DiscBurnService.cs             — IMAPI2 (Windows) / growisofs (Linux) burning
       ExternalAuthoringBridge.cs     — fallback authoring via dvdauthor + mkisofs
       ToolDiscoveryService.cs        — scans for all external tools
@@ -328,6 +335,7 @@ TubeBurnProject
   │     ├── standard: NTSC | PAL
   │     ├── mediaKind: Dvd5 | Dvd9
   │     ├── writeSpeed: int
+  │     ├── videoBitrateKbps: int (default 6000; options: 6000/5000/4000/3000/2000)
   │     ├── outputDirectory: string
   │     └── tool paths: yt-dlp, ffmpeg, dvdauthor, mkisofs, growisofs, ImgBurn, vlc
   ├── channels: ChannelProject[]
@@ -408,8 +416,13 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 2. Single VTS, one PGC per video (multi-PGC), chained for sequential auto-play
 3. Native authoring generates VIDEO_TS + ISO; external bridge available as fallback
 4. Burn via IMAPI2 (Windows) or growisofs (Linux); ImgBurn opt-in fallback
-5. Over-capacity blocking, strict stage semantics, failure details in UI
+5. Two-tier capacity validation: pre-build warning + post-transcode hard gate
 6. Build-only mode (burn toggle), VLC test output button
+7. Configurable video bitrate (6/5/4/3/2 Mbps) with `-maxrate`/`-bufsize` capping
+8. TranscodeManifest for cache-aware re-transcoding on bitrate change
+9. Background yt-dlp metadata fetch for accurate size estimation before build
+10. Stop button to cancel running build/burn process (CancellationToken propagation)
+11. Progressive disc usage updates as each transcode completes
 
 ### Phase 2 — Single-channel menu system
 1. Level 2 menus: video select within a single channel (VTSM menu PGCs)

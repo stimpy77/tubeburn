@@ -486,6 +486,11 @@ public partial class MainWindow : Window
         if (burnResult.Outcome == DiscBurnOutcome.Succeeded)
         {
             ClearPendingBurnRetryContext();
+            if (ViewModel.EjectAfterBurn)
+            {
+                AppLog.Info("Ejecting disc after successful burn.");
+                DiscBurnService.EjectDrive(project.Settings.BurnDevice);
+            }
             if (TryClearDirectoryContents(project.Settings.OutputDirectory, out var cleanupError))
             {
                 AppLog.Info($"Output folder cleaned after successful burn: {project.Settings.OutputDirectory}");

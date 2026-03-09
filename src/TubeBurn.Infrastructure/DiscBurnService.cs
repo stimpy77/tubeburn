@@ -418,6 +418,70 @@ public sealed class DiscBurnService
         }
     }
 
+    /// <summary>
+    /// Ejects the disc tray for convenience after a successful burn. No reinsert wait.
+    /// </summary>
+    public static void EjectDrive(string? preferredDevice)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        EjectDriveWindows(preferredDevice);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void EjectDriveWindows(string? preferredDevice)
+    {
+        try
+        {
+            var recorderType = Type.GetTypeFromProgID("IMAPI2.MsftDiscRecorder2");
+            var discMasterType = Type.GetTypeFromProgID("IMAPI2.MsftDiscMaster2");
+            if (recorderType is null || discMasterType is null) return;
+
+            dynamic discMaster = Activator.CreateInstance(discMasterType)!;
+            var count = (int)discMaster.Count;
+            if (count == 0) return;
+
+            var normalizedPreferred = NormalizeDeviceToken(preferredDevice);
+            string? recorderId = null;
+
+            for (var i = 0; i < count; i++)
+            {
+                var candidateId = (string)discMaster[i];
+                if (recorderId is null)
+                    recorderId = candidateId;
+
+                if (string.IsNullOrWhiteSpace(normalizedPreferred)) continue;
+
+                dynamic probe = Activator.CreateInstance(recorderType)!;
+                probe.InitializeDiscRecorder(candidateId);
+                var paths = ReadVolumePathNames((object)probe).ToList();
+                var match = paths.FirstOrDefault(p =>
+                    string.Equals(NormalizeDeviceToken(p), normalizedPreferred, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    recorderId = candidateId;
+                    try { Marshal.ReleaseComObject((object)probe); } catch { }
+                    break;
+                }
+                try { Marshal.ReleaseComObject((object)probe); } catch { }
+            }
+
+            if (recorderId is null) return;
+
+            dynamic recorder = Activator.CreateInstance(recorderType)!;
+            recorder.InitializeDiscRecorder(recorderId);
+            try { recorder.EjectMedia(); }
+            finally { try { Marshal.ReleaseComObject((object)recorder); } catch { } }
+
+            Marshal.ReleaseComObject((object)discMaster);
+        }
+        catch
+        {
+            // Best-effort eject — don't fail the workflow.
+        }
+    }
+
     [SupportedOSPlatform("windows")]
     private static void EjectAndWaitForReinsert(dynamic recorder, int maxWaitSeconds)
     {

@@ -38,6 +38,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _vlcToolPath = string.Empty;
     private string _selectedBurnDrive = AutoBurnDriveLabel;
     private bool _burnEnabled = true;
+    private bool _ejectAfterBurn = true;
     private string _lastAuthoredWorkingDirectory = string.Empty;
     private string _lastFailureDetail = string.Empty;
     private string _logFilePath = string.Empty;
@@ -210,6 +211,12 @@ public sealed class MainWindowViewModel : ObservableObject
     {
         get => _burnEnabled;
         set => SetProperty(ref _burnEnabled, value);
+    }
+
+    public bool EjectAfterBurn
+    {
+        get => _ejectAfterBurn;
+        set => SetProperty(ref _ejectAfterBurn, value);
     }
 
     public string LastAuthoredWorkingDirectory

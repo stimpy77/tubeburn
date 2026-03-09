@@ -119,6 +119,8 @@
                                         Content="Stop" IsVisible="{Binding IsBusy}"
                                         Background="#EF4444" />
                                 <CheckBox IsChecked="{Binding BurnEnabled}" Content="Burn to disc" VerticalAlignment="Center" />
+                                <CheckBox IsChecked="{Binding EjectAfterBurn}" Content="Eject after burn" VerticalAlignment="Center"
+                                          IsVisible="{Binding BurnEnabled}" />
                                 <Button x:Name="DiscoverToolsButton" Classes="secondary" Click="OnDiscoverToolsClick" Content="Discover Tools" />
                                 <Button x:Name="SaveProjectButton" Classes="secondary" Click="OnSaveProjectClick" Content="Save Project" />
                                 <Button x:Name="LoadProjectButton" Classes="secondary" Click="OnLoadProjectClick" Content="Load Project" />
