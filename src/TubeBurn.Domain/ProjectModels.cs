@@ -81,3 +81,43 @@ public sealed record ChannelMenuLayout(
     int PageNumber,
     IReadOnlyList<MenuButtonLayout> Buttons,
     string BackgroundImagePath);
+
+public sealed record ButtonNavigation(int Up, int Down, int Left, int Right);
+
+public sealed record MenuButton(
+    string Id,
+    int X,
+    int Y,
+    int Width,
+    int Height,
+    string Label,
+    ButtonNavigation Navigation,
+    DvdButtonCommand ActivateCommand);
+
+public sealed record MenuPage(
+    string MenuId,
+    int PageNumber,
+    IReadOnlyList<MenuButton> Buttons,
+    string BackgroundImagePath,
+    MenuPageType Type);
+
+public enum MenuPageType
+{
+    ChannelSelect,
+    VideoSelect,
+}
+
+/// <summary>
+/// Lightweight command descriptor for menu buttons — avoids coupling Domain to DvdAuthoring.
+/// The pipeline maps these to real DvdCommand instances at authoring time.
+/// </summary>
+public sealed record DvdButtonCommand(DvdButtonCommandKind Kind, int Target);
+
+public enum DvdButtonCommandKind
+{
+    JumpVtsTt,
+    JumpSsVtsm,
+    JumpSsVmgm,
+    LinkPgcn,
+    Exit,
+}

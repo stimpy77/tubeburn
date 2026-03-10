@@ -52,6 +52,12 @@ public sealed class UiAutomationTests
         Click(window, "AddUrlsButton");
         Assert.NotEmpty(viewModel.Queue);
 
+        // Force tool discovery to skip media pipeline by pointing to non-existent tools.
+        // The test seeds fake transcoded files so the authoring pipeline can run without
+        // needing real yt-dlp/ffmpeg execution.
+        viewModel.YtDlpToolPath = "/nonexistent/yt-dlp";
+        viewModel.FfmpegToolPath = "/nonexistent/ffmpeg";
+
         var tempRoot = Path.Combine(Path.GetTempPath(), $"tubeburn-headless-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
         var outputRoot = Path.Combine(tempRoot, "output");

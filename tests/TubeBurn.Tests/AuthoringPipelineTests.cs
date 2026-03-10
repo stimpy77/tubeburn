@@ -30,7 +30,7 @@ public sealed class AuthoringPipelineTests
 
         Assert.Equal(8, bytes.Length);
         Assert.Equal(0x30, bytes[0]);
-        Assert.Equal(0x02, bytes[7]);
+        Assert.Equal(0x02, bytes[5]); // title at vm_getbits(22,7) = byte[5]
     }
 
     [Fact]

@@ -9,20 +9,22 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 ## Menu Structure
 
 ### Level 1 — Channel Select
-- One button per YouTube channel represented in the video list
-- Background: the channel's banner image, scaled/cropped to 720x480 (NTSC) or 720x576 (PAL)
-- Each button shows the channel name and channel avatar/icon
+- Full-width stacked list: one row per YouTube channel, spanning the full safe area width
+- Each row: channel avatar (large circle, left-aligned) + channel name (right of avatar)
+- Background: dark solid color
 - Selecting a channel navigates to that channel's Level 2 menu
 - If only one channel is present, skip Level 1 and go straight to Level 2
+- Navigation: up/down only (single column), with Next/Prev page buttons if channels exceed one page
 
 ### Level 2 — Video Select (per channel)
-- One button per video belonging to that channel
-- Background: the channel's banner image (same as Level 1, or a dimmed/blurred variant)
-- Each button shows the video's thumbnail image and title text
-- Pagination if more videos than fit on one screen (e.g., 4-6 per page with Next/Prev buttons)
+- Full-width stacked list: one row per video, spanning the full safe area width
+- Each row: video thumbnail (square, left-aligned) + video title text (right of thumbnail)
+- Background: dark solid color, channel name as header
+- Pagination with Next/Prev buttons when videos exceed one page (~6 per page depending on row height)
 - "Back" button returns to Level 1 when Level 1 exists
-- In single-channel mode (Level 1 skipped), hide "Back" or map it to Page 1 of the current Level 2 menu
+- In single-channel mode (Level 1 skipped), "Back" is still shown but exits/does nothing
 - Selecting a video plays it; on completion, returns to this menu
+- Navigation: up/down between rows, left/right to reach nav buttons on the bottom row
 
 ## Functional Requirements
 
@@ -61,17 +63,28 @@ The user provides one or more YouTube URLs. TubeBurn groups them by channel, dow
 
 ### Menu Generation Phase
 - Generate menu backgrounds:
-  - Take channel banner image, resize to DVD resolution
-  - Composite button regions (thumbnails + text labels) onto the background
-  - Render as a still-frame MPEG-2 stream (short looping video of the still image)
+  - Dark solid-color background with text labels (ffmpeg drawtext for MVP)
+  - Level 1: "Select Channel" header, channel names as row labels
+  - Level 2: channel name as header, video titles as row labels
+  - Future: composite channel avatars (circle-cropped) and video thumbnails (square) into the background image using SkiaSharp — layout reserves left-side space for these images
+  - Render as a still-frame MPEG-2 stream (1-second looping video with infinite still)
 - Generate button highlight overlays:
-  - Create subpicture images defining button regions (normal, selected, activated states)
-  - Mux with spumux-equivalent logic
+  - Full-width rectangular border outlines at each button row's coordinates
+  - 2-bit subpicture bitmap (color 0 = transparent, color 1 = border)
+  - DVD player handles normal/selected/activated states via PCI BTNI color overrides
+  - Encode via SubpictureEncoder (DVD SPU RLE format, interlaced fields)
+- Build menu VOBs:
+  - NAV pack with BTNI button data (coordinates, navigation, commands)
+  - Video sectors from background MPEG-PS
+  - Subpicture PES packet (private_stream_1, substream 0x20)
 - Produce menu PGCs defining:
   - VMGM (Video Manager) menu PGCs for Level 1 (channel select)
   - VTSM menu PGCs for Level 2 (video select per channel)
-  - Button navigation commands (jump to titleset, jump to title, resume)
-  - Post-playback commands (return to menu)
+  - Button navigation commands (JumpSsVtsm, JumpVtsTt, LinkPgcn, CallSsVmgm)
+  - Pre-command: SetHL_BTNN(1) to highlight first button on entry
+  - Post-command: self-loop (LinkPGCN self) to keep menu on screen
+  - Still time = 0xFF (infinite still frame)
+  - Post-playback from titles: CallSS VTSM ROOT (return to video-select menu)
 
 ### DVD Authoring Phase
 - Build the VIDEO_TS directory structure:
@@ -172,43 +185,60 @@ VMG TT_SRPT (Title Search Pointer Table):
 - End of title → post-command chains to next PGC (auto-play) or exits on last title
 - `next_pgc_nr` / `prev_pgc_nr` provide backup navigation path for players that use them
 
-### Menu System PGC Plan (Phase 2-3)
+### Menu System PGC Plan (Phase 2-3) — Implemented
 
 Menus use PGCs in the **menu domain**, completely separate from title playback PGCs.
 
 ```
-Phase 2 — Single-channel (VTSM menus):
-  VTSM_PGCI_UT:
-    Menu PGC #1: Video select page 1
-      - Still-frame background with video thumbnails as buttons
-      - Button commands: JumpVTS_PTT to play selected video
-      - Post-playback: return to this menu
-    Menu PGC #2: Video select page 2 (if paginated)
-      - Next/Prev buttons link between menu PGCs
+Single-channel (VTSM menus only):
+  FP_PGC: JumpSS VTSM 1 ROOT (skip channel select, go to video menu)
 
-Phase 3 — Multi-channel (VMGM + VTSM menus):
-  VMGM_PGCI_UT (Video Manager menus):
-    Menu PGC #1: Channel select (Level 1)
-      - One button per channel
-      - Button commands: JumpSS VTSM to jump to channel's VTS menu
-
-  Per-channel VTS:
+  VTS_01:
     VTSM_PGCI_UT:
-      Menu PGC #1: Video select (Level 2) for this channel
-        - Button commands: JumpVTS_TT to play video
-        - "Back" button: CallSS VMGM to return to channel select
+      Menu PGC #1 (root): Video select page 1
+        - Full-width stacked list of video titles
+        - pre_cmd: SetHL_BTNN(1), post_cmd: LinkPGCN(self)
+        - still_time = 0xFF (infinite)
+        - Video buttons: JumpVtsTt(N)
+        - Back button: CallSsVmgm(1)
+        - Next button (if paginated): LinkPgcn(2)
+      Menu PGC #2: Video select page 2 (if needed)
+        - Prev/Next buttons: LinkPgcn for pagination
     VTS_PGCIT:
-      PGC #1..N: One PGC per video, chained via next_pgc_nr
-        - Same multi-PGC pattern as Phase 1
-        - Post-command on last PGC: CallSS VTSM to return to video select menu
+      PGC #1..N: One per video
+        - post_cmd: CallSS VTSM ROOT (return to menu after playback)
+
+Multi-channel (VMGM + VTSM menus):
+  FP_PGC: JumpSS VMGM ROOT (show channel select)
+
+  VMGM_PGCI_UT (in VIDEO_TS.IFO):
+    Menu PGC #1 (root): Channel select
+      - Full-width stacked list of channel names (with avatar space reserved)
+      - Button commands: JumpSsVtsm(N) to jump to channel's VTS menu
+
+  Per-channel VTS (VTS_01, VTS_02, ...):
+    VTSM_PGCI_UT:
+      Menu PGC #1 (root): Video select for this channel
+        - Full-width stacked list of video titles (with thumbnail space reserved)
+        - Video buttons: JumpVtsTt(N)
+        - Back button: CallSsVmgm(1) to return to channel select
+    VTS_PGCIT:
+      PGC #1..N: One per video, post_cmd: CallSS VTSM ROOT
 ```
 
+**Menu layout:**
+- Full-width rows stacked vertically (single column), not a grid
+- Each row reserves left-side space for an image (channel avatar circle or video thumbnail square — rendered in a future subphase)
+- Title/name text right of the image area
+- Nav buttons (Back, Prev, Next) in a row at the bottom
+- ~6 video rows per page; paginated via LinkPgcn between menu PGCs
+
 **Key design rules:**
-- Each YouTube channel maps to its own VTS (Video Title Set) in Phase 3
-- Each VTS has its own title playback PGC (single PGC, multiple programs) and menu PGCs
+- Each YouTube channel maps to its own VTS (Video Title Set)
+- Each VTS has its own title playback PGCs and menu PGCs
 - The VMG (Video Manager) holds the top-level channel select menu
-- Menu PGCs use `JumpSS`/`CallSS` commands (cross-domain jumps); title PGCs use `LinkPGCN`/`Exit` (within-domain)
-- Button highlights use subpicture overlays (4-color RLE bitmaps)
+- Menu PGCs use `JumpSS`/`CallSS` commands (cross-domain jumps); title PGCs use `CallSS VTSM` (return to menu)
+- Button highlights use subpicture overlays (2-bit RLE bitmaps with DVD player color overrides)
 
 ## GUI
 
@@ -270,18 +300,24 @@ tubeburn/
     TubeBurn.Domain/                 — core models (class library)
       ProjectModels.cs               — VideoStandard, DiscMediaKind, ProjectSettings,
                                        VideoSource, ChannelProject, TubeBurnProject,
-                                       ToolAvailability, MenuButtonLayout, etc.
+                                       ToolAvailability, MenuButtonLayout, MenuButton,
+                                       MenuPage, ButtonNavigation, DvdButtonCommand, etc.
 
     TubeBurn.DvdAuthoring/           — native DVD authoring engine (class library)
-      NativeAuthoringPipeline.cs     — orchestrates IFO + VOB + ISO generation
-      DvdIfoWriter.cs                — binary IFO generation (VMG + VTS)
+      NativeAuthoringPipeline.cs     — orchestrates IFO + VOB + ISO generation (with/without menus)
+      DvdIfoWriter.cs                — binary IFO generation (VMG + VTS, with VTSM/VMGM menu PGC tables)
       DvdVobMuxer.cs                 — MPEG-PS → DVD VOB with NAV packs
+      MenuVobBuilder.cs              — builds menu VOBs (NAV+BTNI, video, subpicture PES)
+      SubpictureEncoder.cs           — DVD SPU RLE encoder (2-bit bitmaps → nibble-coded packets)
+      MenuButtonHighlightRenderer.cs — generates highlight overlay bitmaps for button borders
+      Highlights.cs                  — menu layout planning (video-select pages, channel-select page)
       DvdPgcCompiler.cs              — PGC structure + DVD VM command generation
-      DvdCommandCodec.cs             — 8-byte DVD VM bytecode encoder
+      DvdCommandCodec.cs             — 8-byte DVD VM bytecode encoder (incl. menu commands)
       AuthoringContracts.cs          — IDvdAuthoringBackend interface
       Ifo.cs, Pgc.cs, Vob.cs        — domain models for IFO/PGC/VOB structures
 
     TubeBurn.Infrastructure/         — external tool integration (class library)
+      MenuBackgroundRenderer.cs      — ffmpeg drawtext → MPEG-2 menu background stills
       MediaPipelineService.cs        — yt-dlp download + ffmpeg transcode with progress
       TranscodeManifest.cs           — JSON manifest for transcode cache invalidation
       DiscBurnService.cs             — IMAPI2 (Windows) / growisofs (Linux) burning
@@ -377,7 +413,7 @@ Key specs the authoring engine must implement:
   - IFO writer parity — **implemented** (`DvdIfoWriter`)
   - VOB/NV_PCK placement and indexing parity — **implemented** (`DvdVobMuxer`)
   - PGC/cell/navigation command parity — **implemented** (`DvdPgcCompiler`, `DvdCommandCodec`)
-  - Menu/subpicture behavior parity — **not yet started**
+  - Menu/subpicture behavior parity — **implemented** (`SubpictureEncoder`, `MenuVobBuilder`, `MenuHighlightPlanner`)
 - External authoring bridge (`ExternalAuthoringBridge`) available as fallback
 - Define parity validation artifacts:
   - Byte-level checks where deterministic output is expected (headers/tables/offset maps)
@@ -392,7 +428,9 @@ Key specs the authoring engine must implement:
 | `dvdpgc.c` | `DvdPgcCompiler.cs` | Implemented (basic) |
 | `dvdvob.c` | `DvdVobMuxer.cs` | Implemented |
 | `dvdcompile.c` + `dvdvm.h` | `DvdCommandCodec.cs` | Implemented (core commands) |
-| `subgen*.c` + `subrender.c` | `MenuHighlightPlanner` (stub) | Phase 2 |
+| `subgen*.c` + `subrender.c` | `SubpictureEncoder.cs`, `MenuButtonHighlightRenderer.cs`, `MenuHighlightPlanner.cs` | Implemented |
+| menu VOB building | `MenuVobBuilder.cs` | Implemented |
+| menu backgrounds | `MenuBackgroundRenderer.cs` (Infrastructure) | Implemented (ffmpeg drawtext MVP) |
 | `dvdauthor.c` | `NativeAuthoringPipeline.cs` | Implemented |
 
 ## External Dependencies
@@ -424,18 +462,20 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 10. Stop button to cancel running build/burn process (CancellationToken propagation)
 11. Progressive disc usage updates as each transcode completes
 
-### Phase 2 — Single-channel menu system
-1. Level 2 menus: video select within a single channel (VTSM menu PGCs)
-2. Still-image backgrounds with video thumbnail buttons
-3. Button highlight subpictures (4-color RLE)
-4. Post-playback return to menu via `CallSS VTSM` command
-5. Menu preview in GUI
-
-### Phase 3 — Multi-channel
-1. Level 1 menu: channel select (VMGM menu PGC)
-2. Each channel becomes its own VTS with separate menu PGCs and title PGC
-3. Pagination for channels with many videos (multiple menu PGCs per channel)
-4. `JumpSS`/`CallSS` navigation between VMGM and VTSM domains
+### Phase 2+3 — DVD Menu System (implemented)
+1. Level 2 menus: video select within each channel (VTSM menu PGCs)
+2. Level 1 menu: channel select for multi-channel projects (VMGM menu PGC)
+3. Full-width stacked row layout (not grid) — reserves space for future thumbnail/avatar images
+4. Still-image backgrounds via ffmpeg drawtext (MVP); SkiaSharp rendering planned for thumbnail compositing
+5. Button highlight subpictures (2-bit RLE, DVD player color overrides for states)
+6. Post-playback return to menu via `CallSS VTSM ROOT`
+7. Each channel = its own VTS, with separate VTSM and title PGCs
+8. Pagination via `LinkPgcn` between menu PGCs
+9. `MenuBackgroundRenderCallback` delegate decouples background rendering from authoring engine
+10. `MenuBackgroundRenderCallback` wired in `AuthoringBackendSelector` when ffmpeg is available — menus activate automatically
+11. **Planned subphases**:
+    - Thumbnail compositing: channel avatar (circle-cropped) left of channel name on Level 1, video thumbnail (square) left of title on Level 2
+    - Menu preview in GUI
 
 ### Phase 4 — Polish
 1. Animated menu backgrounds (short video loops)

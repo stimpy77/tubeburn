@@ -336,7 +336,7 @@ public sealed class MainWindowViewModel : ObservableObject
                 {
                     Url = url,
                     Title = HumanizeSlug(GetDisplaySlug(uri, mediaBaseName)),
-                    Channel = NormalizeChannel(uri.Host),
+                    Channel = string.Empty,
                     Duration = "--:--",
                     Status = "Queued",
                     Detail = "Fetching metadata...",
@@ -409,7 +409,7 @@ public sealed class MainWindowViewModel : ObservableObject
                     {
                         Url = video.Url,
                         Title = video.Title,
-                        Channel = channel.Name,
+                        Channel = IsHostnameLikeChannel(channel.Name) ? string.Empty : channel.Name,
                         Duration = video.Duration == TimeSpan.Zero ? "--:--" : video.Duration.ToString(@"hh\:mm\:ss"),
                         Status = "Queued",
                         Detail = hasTranscoded ? "Loaded from project file." : (hasDuration ? "Loaded from project file." : "Fetching metadata..."),
@@ -454,20 +454,19 @@ public sealed class MainWindowViewModel : ObservableObject
             BurnDevice: NormalizeBurnDevice(SelectedBurnDrive));
 
         var channels = Queue
-            .GroupBy(item => string.IsNullOrWhiteSpace(item.Channel) ? "Imported Videos" : item.Channel)
+            .GroupBy(
+                item =>
+                {
+                    var ch = item.Channel?.Trim();
+                    return string.IsNullOrWhiteSpace(ch) || IsHostnameLikeChannel(ch) ? "Imported Videos" : ch;
+                },
+                StringComparer.OrdinalIgnoreCase)
             .Select(group =>
                 new ChannelProject(
                     group.Key,
                     string.Empty,
                     string.Empty,
-                    group.Select(item => new VideoSource(
-                        item.Url,
-                        item.Title,
-                        string.Empty,
-                        ParseDuration(item.Duration),
-                        item.SourcePath,
-                        item.TranscodedPath,
-                        item.EstimatedSizeBytes)).ToList()))
+                    group.Select(item => ToVideoSource(item)).ToList()))
             .ToList();
 
         return new TubeBurnProject("TubeBurn Project", settings, channels);
@@ -1212,11 +1211,16 @@ public sealed class MainWindowViewModel : ObservableObject
         return (videoBytesPerSec + overheadBytesPerSec) * durationSeconds;
     }
 
+    private static VideoSource ToVideoSource(QueuedVideoItem item) =>
+        new(item.Url, item.Title, string.Empty, ParseDuration(item.Duration),
+            item.SourcePath, item.TranscodedPath, item.EstimatedSizeBytes);
+
     private static TimeSpan ParseDuration(string duration) =>
         TimeSpan.TryParse(duration, out var parsed) ? parsed : TimeSpan.Zero;
 
-    private static string NormalizeChannel(string host) =>
-        host.Replace("www.", string.Empty, StringComparison.OrdinalIgnoreCase);
+    private static bool IsHostnameLikeChannel(string channel) =>
+        string.IsNullOrWhiteSpace(channel) ||
+        channel.Contains('.') && Uri.CheckHostName(channel.Replace("www.", "")) != UriHostNameType.Unknown;
 
     private static string CreateMediaBaseName(Uri uri, string originalUrl)
     {
@@ -1226,6 +1230,16 @@ public sealed class MainWindowViewModel : ObservableObject
             if (!string.IsNullOrWhiteSpace(id))
             {
                 return Slugify($"yt-{id}");
+            }
+
+            // youtube.com/shorts/ID
+            if (uri.AbsolutePath.StartsWith("/shorts/", StringComparison.OrdinalIgnoreCase))
+            {
+                var shortsId = uri.AbsolutePath["/shorts/".Length..].Trim('/');
+                if (!string.IsNullOrWhiteSpace(shortsId))
+                {
+                    return Slugify($"yt-{shortsId}");
+                }
             }
         }
 

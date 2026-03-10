@@ -684,7 +684,9 @@ public partial class MainWindow : Window
 
     private async Task FetchMetadataForEstimatingItemsAsync()
     {
-        var estimatingItems = ViewModel.Queue.Where(item => item.IsEstimating).ToList();
+        // Fetch metadata for items that need size estimates OR have unresolved channels.
+        // Channel is empty when newly added or loaded from a stale project with hostname channels.
+        var estimatingItems = ViewModel.Queue.Where(item => item.IsEstimating || string.IsNullOrWhiteSpace(item.Channel)).ToList();
         if (estimatingItems.Count == 0)
             return;
 

@@ -11,12 +11,25 @@ public sealed record NativeAuthoringPlan(
     IReadOnlyList<VobSegmentPlan> VobSegments,
     IReadOnlyList<ChannelMenuLayout> Menus);
 
+/// <summary>
+/// Callback for rendering menu backgrounds. The pipeline calls this to generate
+/// MPEG-2 still frames; the actual rendering lives in Infrastructure (MenuBackgroundRenderer).
+/// </summary>
+public delegate Task<string> MenuBackgroundRenderCallback(
+    string outputDirectory, MenuPage page, VideoStandard standard, CancellationToken cancellationToken);
+
 public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
 {
     private readonly DvdIfoSerializer _ifoSerializer = new();
     private readonly DvdPgcCompiler _pgcCompiler = new();
     private readonly DvdVobPlanner _vobPlanner = new();
     private readonly MenuHighlightPlanner _highlightPlanner = new();
+
+    /// <summary>
+    /// Optional callback for rendering menu backgrounds.
+    /// When null, menus are skipped (backward-compatible auto-play behavior).
+    /// </summary>
+    public MenuBackgroundRenderCallback? MenuRenderer { get; set; }
 
     public AuthoringBackendKind Kind => AuthoringBackendKind.NativePort;
 
@@ -45,23 +58,38 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         var videoTsDirectory = Path.Combine(request.WorkingDirectory, "VIDEO_TS");
         Directory.CreateDirectory(videoTsDirectory);
 
-        // Mux transcoded MPEG-PS files into proper DVD VOBs with NAV packs.
         var standard = request.Project.Settings.Standard;
+        var project = request.Project;
+
+        if (MenuRenderer is not null)
+        {
+            return await AuthorWithMenusAsync(request, plan, videoTsDirectory, outputPath, cancellationToken);
+        }
+
+        return await AuthorAutoPlayAsync(request, plan, videoTsDirectory, outputPath, cancellationToken);
+    }
+
+    /// <summary>
+    /// Original auto-play authoring flow (no menus).
+    /// </summary>
+    private async Task<AuthoringResult> AuthorAutoPlayAsync(
+        DvdBuildRequest request, NativeAuthoringPlan plan,
+        string videoTsDirectory, string planPath,
+        CancellationToken cancellationToken)
+    {
+        var standard = request.Project.Settings.Standard;
+
         var vobFileSizes = new List<long>();
         var vobDurationsPts = new List<long>();
         var allVobuSectorOffsets = new List<IReadOnlyList<int>>();
         var vobIndex = 1;
         var nextStartSector = 0;
+
         foreach (var video in request.Project.Videos)
         {
             if (!File.Exists(video.TranscodedPath))
             {
-                return new AuthoringResult(
-                    Kind,
-                    AuthoringResultStatus.Failed,
-                    $"Native authoring requires transcoded media, but missing file: {video.TranscodedPath}",
-                    [outputPath, videoTsDirectory],
-                    []);
+                return FailedResult($"Missing transcoded file: {video.TranscodedPath}", planPath, videoTsDirectory);
             }
 
             var targetVobPath = Path.Combine(videoTsDirectory, $"VTS_01_{vobIndex}.VOB");
@@ -76,7 +104,6 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             vobIndex++;
         }
 
-        // Generate spec-compliant IFO files using actual VOB sizes and durations.
         var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.IFO"), vtsIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.BUP"), vtsIfo, cancellationToken);
@@ -85,7 +112,6 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.IFO"), vmgIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.BUP"), vmgIfo, cancellationToken);
 
-        // Create empty AUDIO_TS directory (required by DVD-Video spec).
         Directory.CreateDirectory(Path.Combine(request.WorkingDirectory, "AUDIO_TS"));
 
         var isoPath = Path.Combine(request.WorkingDirectory, "tubeburn.iso");
@@ -95,8 +121,169 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             Kind,
             AuthoringResultStatus.Succeeded,
             "Native authoring generated VIDEO_TS and ISO artifacts.",
-            [outputPath, videoTsDirectory, isoPath],
+            [planPath, videoTsDirectory, isoPath],
             []);
+    }
+
+    /// <summary>
+    /// Menu-enabled authoring flow.
+    /// </summary>
+    private async Task<AuthoringResult> AuthorWithMenusAsync(
+        DvdBuildRequest request, NativeAuthoringPlan plan,
+        string videoTsDirectory, string planPath,
+        CancellationToken cancellationToken)
+    {
+        var standard = request.Project.Settings.Standard;
+        var project = request.Project;
+        var isMultiChannel = project.Channels.Count > 1;
+        var menuWorkDir = Path.Combine(request.WorkingDirectory, "menu-work");
+        Directory.CreateDirectory(menuWorkDir);
+
+        var allVtsIfos = new List<byte[]>();
+        var titlesPerVts = new List<int>();
+        var totalTitleCount = 0;
+
+        // Process each channel as a separate VTS
+        for (var ch = 0; ch < project.Channels.Count; ch++)
+        {
+            var channel = project.Channels[ch];
+            var vtsNumber = ch + 1;
+            var vtsTag = $"VTS_{vtsNumber:D2}";
+
+            // Build video-select menu pages
+            var videoMenuPages = _highlightPlanner.BuildVideoSelectPages(channel, vtsNumber, isMultiChannel: isMultiChannel);
+
+            // Render menu backgrounds & build menu VOB for all pages
+            long menuVobSize = 0;
+            var menuPageSectorOffsets = new List<int>();
+            if (videoMenuPages.Count > 0)
+            {
+                var menuVobPath = Path.Combine(videoTsDirectory, $"{vtsTag}_0.VOB");
+                await using var menuVobStream = new FileStream(menuVobPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+
+                foreach (var page in videoMenuPages)
+                {
+                    var pageSector = (int)(menuVobSize / 2048);
+                    menuPageSectorOffsets.Add(pageSector);
+
+                    var bgPath = await MenuRenderer!(menuWorkDir, page, standard, cancellationToken);
+                    var spuPacket = BuildSpuPacket(page.Buttons, standard);
+
+                    var tempVobPath = Path.Combine(menuWorkDir, $"{vtsTag}_menu_p{page.PageNumber}.vob");
+                    await MenuVobBuilder.BuildAsync(
+                        bgPath, spuPacket, page.Buttons, standard, tempVobPath, cancellationToken,
+                        navPackLbn: pageSector);
+
+                    var tempData = await File.ReadAllBytesAsync(tempVobPath, cancellationToken);
+                    await menuVobStream.WriteAsync(tempData, cancellationToken);
+                    menuVobSize += tempData.Length;
+                }
+            }
+
+            // Mux title VOBs
+            var vobFileSizes = new List<long>();
+            var vobDurationsPts = new List<long>();
+            var allVobuSectorOffsets = new List<IReadOnlyList<int>>();
+            var vobFileIndex = 1;
+            var nextStartSector = 0;
+
+            foreach (var video in channel.Videos)
+            {
+                if (!File.Exists(video.TranscodedPath))
+                {
+                    return FailedResult($"Missing transcoded file: {video.TranscodedPath}", planPath, videoTsDirectory);
+                }
+
+                var targetVobPath = Path.Combine(videoTsDirectory, $"{vtsTag}_{vobFileIndex}.VOB");
+                var muxResult = await DvdVobMuxer.MuxAsync(
+                    video.TranscodedPath, targetVobPath,
+                    vobId: vobFileIndex, cellId: 1, standard, cancellationToken,
+                    startSector: nextStartSector);
+                vobFileSizes.Add(muxResult.FileSizeBytes);
+                vobDurationsPts.Add(muxResult.DurationPts);
+                allVobuSectorOffsets.Add(muxResult.VobuSectorOffsets);
+                nextStartSector += (int)(muxResult.FileSizeBytes / 2048);
+                vobFileIndex++;
+            }
+
+            // Write VTS IFO with menu support
+            var vtsIfo = DvdIfoWriter.WriteVtsIfo(
+                standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets,
+                menuPages: videoMenuPages.Count > 0 ? videoMenuPages : null,
+                menuVobSizeBytes: menuVobSize,
+                returnToMenu: true,
+                menuPageSectorOffsets: menuPageSectorOffsets.Count > 0 ? menuPageSectorOffsets : null);
+
+            await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.IFO"), vtsIfo, cancellationToken);
+            await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.BUP"), vtsIfo, cancellationToken);
+
+            allVtsIfos.Add(vtsIfo);
+            titlesPerVts.Add(channel.Videos.Count);
+            totalTitleCount += channel.Videos.Count;
+        }
+
+        // Build VMG (Video Manager)
+        int vmgMenuVobSectors = 0;
+        IReadOnlyList<MenuPage>? channelSelectPages = null;
+
+        if (isMultiChannel)
+        {
+            // Build channel-select menu
+            var channelPage = _highlightPlanner.BuildChannelSelectPage(project.Channels);
+            channelSelectPages = [channelPage];
+
+            var bgPath = await MenuRenderer!(menuWorkDir, channelPage, standard, cancellationToken);
+            var spuPacket = BuildSpuPacket(channelPage.Buttons, standard);
+
+            var vmgMenuVobPath = Path.Combine(videoTsDirectory, "VIDEO_TS.VOB");
+            var vmgMenuVobSize = await MenuVobBuilder.BuildAsync(
+                bgPath, spuPacket, channelPage.Buttons, standard, vmgMenuVobPath, cancellationToken);
+            vmgMenuVobSectors = (int)(vmgMenuVobSize / 2048);
+        }
+
+        var vmgIfo = DvdIfoWriter.WriteVmgIfo(
+            totalTitleCount, standard, allVtsIfos[0],
+            vtsCount: project.Channels.Count,
+            titlesPerVts: titlesPerVts,
+            menuPages: channelSelectPages,
+            menuVobSectors: vmgMenuVobSectors,
+            hasVtsmMenus: true);
+
+        await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.IFO"), vmgIfo, cancellationToken);
+        await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.BUP"), vmgIfo, cancellationToken);
+
+        Directory.CreateDirectory(Path.Combine(request.WorkingDirectory, "AUDIO_TS"));
+
+        var isoPath = Path.Combine(request.WorkingDirectory, "tubeburn.iso");
+        await BuildIsoAsync(request.WorkingDirectory, isoPath, cancellationToken);
+
+        return new AuthoringResult(
+            Kind,
+            AuthoringResultStatus.Succeeded,
+            "Native authoring with DVD menus generated VIDEO_TS and ISO artifacts.",
+            [planPath, videoTsDirectory, isoPath],
+            []);
+    }
+
+    private AuthoringResult FailedResult(string message, string planPath, string videoTsDir)
+    {
+        return new AuthoringResult(
+            Kind,
+            AuthoringResultStatus.Failed,
+            message,
+            [planPath, videoTsDir],
+            []);
+    }
+
+    private static byte[] BuildSpuPacket(IReadOnlyList<MenuButton> buttons, VideoStandard standard)
+    {
+        var highlightBitmap = MenuButtonHighlightRenderer.Render(buttons, standard);
+        var width = MenuButtonHighlightRenderer.GetWidth();
+        var height = MenuButtonHighlightRenderer.GetHeight(standard);
+        return SubpictureEncoder.Encode(
+            highlightBitmap, width, height, 0, 0,
+            [0, 1, 0, 0], // CLUT indices: pixel 1 → white (border)
+            [0, 0, 0, 0]); // Initially transparent; BTN_COLI overrides for selected button
     }
 
     private static async Task BuildIsoAsync(string dvdRootDirectory, string isoPath, CancellationToken cancellationToken)
