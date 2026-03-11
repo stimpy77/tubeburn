@@ -110,14 +110,14 @@ public sealed class UiAutomationTests
     }
 
     [AvaloniaFact]
-    public void PreviewMenu_button_reports_phase2_placeholder()
+    public void PreviewMenu_button_with_empty_queue_shows_add_videos_message()
     {
         var window = CreateWindow();
         var viewModel = (MainWindowViewModel)window.DataContext!;
 
         Click(window, "PreviewMenuButton");
 
-        Assert.Contains("Phase 2", viewModel.BuildStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Add videos", viewModel.BuildStatus, StringComparison.OrdinalIgnoreCase);
     }
 
     [AvaloniaFact]

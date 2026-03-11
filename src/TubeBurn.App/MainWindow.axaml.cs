@@ -653,7 +653,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPreviewMenuClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewMenuUnavailable();
+    private void OnPreviewMenuClick(object? sender, RoutedEventArgs e) => ViewModel.GenerateMenuPreview();
+
+    private void OnPreviewPrevClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewPrevPage();
+
+    private void OnPreviewNextClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewNextPage();
 
     private void OnClearQueueClick(object? sender, RoutedEventArgs e) => ViewModel.ClearQueue();
 

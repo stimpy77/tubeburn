@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using TubeBurn.Domain;
 using TubeBurn.DvdAuthoring;
 using TubeBurn.Infrastructure;
@@ -46,6 +48,10 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _logFilePath = string.Empty;
     private double _overallProgress;
     private bool _isBusy;
+    private Bitmap? _menuPreviewImage;
+    private string _menuPreviewLabel = string.Empty;
+    private List<MenuPage> _previewPages = new();
+    private int _previewPageIndex;
 
     public MainWindowViewModel()
     {
@@ -303,6 +309,22 @@ public sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<string> CommandPreview { get; }
 
     public ObservableCollection<string> AvailableBurnDrives { get; }
+
+    public Bitmap? MenuPreviewImage
+    {
+        get => _menuPreviewImage;
+        private set => SetProperty(ref _menuPreviewImage, value);
+    }
+
+    public string MenuPreviewLabel
+    {
+        get => _menuPreviewLabel;
+        private set => SetProperty(ref _menuPreviewLabel, value);
+    }
+
+    public bool HasPreviewPages => _previewPages.Count > 0;
+    public bool CanPreviewPrev => _previewPageIndex > 0;
+    public bool CanPreviewNext => _previewPageIndex < _previewPages.Count - 1;
 
     public string ProjectSummary =>
         $"{Queue.Count} videos queued, {SelectedVideoStandard}, {SelectedDiscType}, output {OutputFolder}";
@@ -945,10 +967,63 @@ public sealed class MainWindowViewModel : ObservableObject
             .First(drive => string.Equals(drive, previousSelection, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void PreviewMenuUnavailable()
+    public void GenerateMenuPreview()
     {
-        BuildStatus = "Menu preview is planned for Phase 2 after menu generation lands.";
-        AddRecentActivity(BuildStatus);
+        var project = BuildProject();
+        if (project.Channels.Count == 0 || project.Videos.Count == 0)
+        {
+            BuildStatus = "Add videos to preview menus.";
+            return;
+        }
+
+        var planner = new MenuHighlightPlanner();
+        var pages = new List<MenuPage>();
+        var isMultiChannel = project.Channels.Count > 1;
+
+        if (isMultiChannel)
+        {
+            pages.Add(planner.BuildChannelSelectPage(project.Channels));
+        }
+
+        for (var i = 0; i < project.Channels.Count; i++)
+        {
+            pages.AddRange(planner.BuildVideoSelectPages(
+                project.Channels[i], i + 1, isMultiChannel: isMultiChannel));
+        }
+
+        _previewPages = pages;
+        _previewPageIndex = 0;
+        RenderCurrentPreviewPage(project.Settings.Standard);
+    }
+
+    public void PreviewPrevPage()
+    {
+        if (_previewPageIndex <= 0) return;
+        _previewPageIndex--;
+        RenderCurrentPreviewPage(ParseStandard(SelectedVideoStandard));
+    }
+
+    public void PreviewNextPage()
+    {
+        if (_previewPageIndex >= _previewPages.Count - 1) return;
+        _previewPageIndex++;
+        RenderCurrentPreviewPage(ParseStandard(SelectedVideoStandard));
+    }
+
+    private void RenderCurrentPreviewPage(VideoStandard standard)
+    {
+        if (_previewPages.Count == 0) return;
+
+        var page = _previewPages[_previewPageIndex];
+        var pngBytes = SkiaMenuRenderer.RenderPreview(page, standard);
+
+        using var stream = new MemoryStream(pngBytes);
+        MenuPreviewImage = new Bitmap(stream);
+        MenuPreviewLabel = $"{page.MenuId} (page {page.PageNumber}) — {_previewPageIndex + 1}/{_previewPages.Count}";
+
+        OnPropertyChanged(nameof(HasPreviewPages));
+        OnPropertyChanged(nameof(CanPreviewPrev));
+        OnPropertyChanged(nameof(CanPreviewNext));
     }
 
     public void ClearQueue()
