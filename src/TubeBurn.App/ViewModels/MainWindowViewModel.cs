@@ -452,8 +452,21 @@ public sealed class MainWindowViewModel : ObservableObject
         PendingUrls = string.IsNullOrWhiteSpace(PendingUrls)
             ? content.Trim()
             : $"{PendingUrls}{Environment.NewLine}{content.Trim()}";
+    }
 
-        AddPendingUrlsToQueue();
+    internal static bool IsYouTubePlaylistUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+
+        if (!uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var hasList = !string.IsNullOrWhiteSpace(GetQueryValue(uri.Query, "list"));
+        var hasVideo = !string.IsNullOrWhiteSpace(GetQueryValue(uri.Query, "v"));
+
+        // Pure playlist URL: has list= but no v= (e.g. /playlist?list=PLxxx)
+        return hasList && !hasVideo;
     }
 
     public void LoadProject(TubeBurnProject project)
@@ -1105,6 +1118,22 @@ public sealed class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(HasPreviewPages));
         OnPropertyChanged(nameof(CanPreviewPrev));
         OnPropertyChanged(nameof(CanPreviewNext));
+    }
+
+    public void RemoveFromQueue(QueuedVideoItem item)
+    {
+        Queue.Remove(item);
+        RefreshMetrics();
+    }
+
+    public void MoveQueueItem(QueuedVideoItem item, int direction)
+    {
+        var index = Queue.IndexOf(item);
+        var newIndex = index + direction;
+        if (index < 0 || newIndex < 0 || newIndex >= Queue.Count)
+            return;
+
+        Queue.Move(index, newIndex);
     }
 
     public void ClearQueue()

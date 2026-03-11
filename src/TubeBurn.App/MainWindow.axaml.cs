@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -87,13 +88,77 @@ public partial class MainWindow : Window
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync();
         ViewModel.ImportUrlsFromText(content);
+        await ExpandPlaylistUrlsInPendingAsync();
+        ViewModel.AddPendingUrlsToQueue();
         _ = FetchMetadataWithBusyAsync();
     }
 
-    private void OnAddUrlsClick(object? sender, RoutedEventArgs e)
+    private async void OnAddUrlsClick(object? sender, RoutedEventArgs e)
     {
+        await ExpandPlaylistUrlsInPendingAsync();
         ViewModel.AddPendingUrlsToQueue();
         _ = FetchMetadataWithBusyAsync();
+    }
+
+    private async Task ExpandPlaylistUrlsInPendingAsync()
+    {
+        var lines = ViewModel.PendingUrls
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var playlistUrls = lines.Where(MainWindowViewModel.IsYouTubePlaylistUrl).ToList();
+        if (playlistUrls.Count == 0)
+            return;
+
+        var ytDlpResolution = ExternalToolPathResolver.Resolve("yt-dlp", ViewModel.YtDlpToolPath);
+        if (ytDlpResolution.ResolvedPath is not { } ytDlp)
+            return;
+
+        ViewModel.BuildStatus = $"Expanding {playlistUrls.Count} playlist(s)...";
+        var toolRunner = new ProcessExternalToolRunner();
+        var expanded = new List<string>();
+
+        foreach (var line in lines)
+        {
+            if (!MainWindowViewModel.IsYouTubePlaylistUrl(line))
+            {
+                expanded.Add(line);
+                continue;
+            }
+
+            var args = new List<string> { "--flat-playlist", "--dump-json", line };
+            var result = await toolRunner.RunAsync(ytDlp, args, Path.GetTempPath(), CancellationToken.None);
+
+            if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                var count = 0;
+                foreach (var jsonLine in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(jsonLine);
+                        if (doc.RootElement.TryGetProperty("id", out var idProp) && idProp.GetString() is { } videoId)
+                        {
+                            expanded.Add($"https://www.youtube.com/watch?v={videoId}");
+                            count++;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Skip malformed lines
+                    }
+                }
+
+                ViewModel.AddRecentActivity($"Playlist expanded to {count} video(s).");
+            }
+            else
+            {
+                // Expansion failed — keep original URL so user sees it wasn't silently dropped
+                expanded.Add(line);
+                ViewModel.AddRecentActivity($"Could not expand playlist: {line}");
+            }
+        }
+
+        ViewModel.PendingUrls = string.Join(Environment.NewLine, expanded);
     }
 
     private async Task FetchMetadataWithBusyAsync()
@@ -694,6 +759,24 @@ public partial class MainWindow : Window
     private void OnPreviewPrevClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewPrevPage();
 
     private void OnPreviewNextClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewNextPage();
+
+    private void OnRemoveQueueItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: QueuedVideoItem item })
+            ViewModel.RemoveFromQueue(item);
+    }
+
+    private void OnMoveQueueItemUpClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: QueuedVideoItem item })
+            ViewModel.MoveQueueItem(item, -1);
+    }
+
+    private void OnMoveQueueItemDownClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: QueuedVideoItem item })
+            ViewModel.MoveQueueItem(item, 1);
+    }
 
     private void OnClearQueueClick(object? sender, RoutedEventArgs e) => ViewModel.ClearQueue();
 

@@ -255,16 +255,28 @@
                                                     </Style>
                                                 </Border.Styles>
                                                 <StackPanel Spacing="10">
-                                                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
-                                                        <StackPanel>
+                                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+                                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="0">
+                                                            <Button Classes="secondary" Padding="4,1" FontSize="11"
+                                                                    Content="&#x25B2;" ToolTip.Tip="Move up"
+                                                                    Click="OnMoveQueueItemUpClick" />
+                                                            <Button Classes="secondary" Padding="4,1" FontSize="11"
+                                                                    Content="&#x25BC;" ToolTip.Tip="Move down"
+                                                                    Click="OnMoveQueueItemDownClick" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1">
                                                             <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Title}" />
                                                             <TextBlock Classes="muted" Text="{Binding Channel}" />
                                                             <TextBlock Classes="muted" FontSize="12" Text="{Binding Url}" TextWrapping="Wrap" />
                                                         </StackPanel>
-                                                        <Border Grid.Column="1" Classes="pill" VerticalAlignment="Center">
+                                                        <Border Grid.Column="2" Classes="pill" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding Status}" />
                                                         </Border>
-                                                        <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Duration}" />
+                                                        <TextBlock Grid.Column="3" VerticalAlignment="Center" Text="{Binding Duration}" />
+                                                        <Button Grid.Column="4" Classes="secondary" Padding="6,4"
+                                                                Content="&#x2715;" ToolTip.Tip="Remove from queue"
+                                                                Click="OnRemoveQueueItemClick"
+                                                                VerticalAlignment="Top" />
                                                     </Grid>
                                                     <TextBlock Classes="muted" Text="{Binding Detail}" />
                                                     <ProgressBar Minimum="0" Maximum="100" Value="{Binding Progress}" Height="8" />

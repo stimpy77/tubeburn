@@ -287,6 +287,13 @@ public static class SkiaMenuRenderer
         using var labelFont = new SKFont(typeface, baseFontSize);
         using var labelPaint = new SKPaint { Color = L2TextColor, IsAntialias = true };
         using var rowBgPaint = new SKPaint { Color = new SKColor(0, 0, 0, 60), IsAntialias = true };
+        using var rowBorderPaint = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, 40),
+            IsAntialias = true,
+            IsStroke = true,
+            StrokeWidth = 1,
+        };
 
         var contentLabels = page.Buttons.Select(b => b.Label).Where(l => l.Length > 15).ToList();
         var commonSuffix = FindCommonSuffix(contentLabels);
@@ -297,6 +304,8 @@ public static class SkiaMenuRenderer
 
             // Semi-transparent row background for contrast
             canvas.DrawRoundRect(rowRect, 3, 3, rowBgPaint);
+            // Subtle border to delineate button bounds (visible in VLC where SPU overlay doesn't render)
+            canvas.DrawRoundRect(rowRect, 3, 3, rowBorderPaint);
 
             var label = button.Label;
             if (commonSuffix.Length > 0 && label.EndsWith(commonSuffix, StringComparison.Ordinal))
