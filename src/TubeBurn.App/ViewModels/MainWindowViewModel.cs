@@ -477,6 +477,7 @@ public sealed class MainWindowViewModel : ObservableObject
                         SourcePath = Path.Combine(OutputFolder, "downloads", $"{mediaBaseName}.mp4"),
                         TranscodedPath = transcodedPath,
                         ThumbnailPath = video.ThumbnailPath,
+                        AspectRatio = video.AspectRatio,
                         ChannelBannerPath = channel.BannerImagePath,
                         ChannelAvatarPath = channel.AvatarImagePath,
                         EstimatedSizeBytes = hasTranscoded
@@ -595,7 +596,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public void SetPipelineStageState(string stageName, string state) => SetStage(stageName, state);
 
-    public void ApplyResolvedMetadata(string url, string? title, string? channel, int? durationSeconds)
+    public void ApplyResolvedMetadata(string url, string? title, string? channel, int? durationSeconds, double? aspectRatio = null)
     {
         var item = Queue.FirstOrDefault(candidate => string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase));
         if (item is null) return;
@@ -617,6 +618,9 @@ public sealed class MainWindowViewModel : ObservableObject
                 item.Detail = "Metadata resolved.";
             }
         }
+
+        if (aspectRatio is not null)
+            item.AspectRatio = aspectRatio.Value < 1.5 ? DvdAspectRatio.Standard4x3 : DvdAspectRatio.Wide16x9;
 
         RefreshMetrics();
     }
@@ -1339,7 +1343,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private static VideoSource ToVideoSource(QueuedVideoItem item) =>
         new(item.Url, item.Title, item.ThumbnailPath, ParseDuration(item.Duration),
-            item.SourcePath, item.TranscodedPath, item.EstimatedSizeBytes);
+            item.SourcePath, item.TranscodedPath, item.EstimatedSizeBytes, item.AspectRatio);
 
     private static TimeSpan ParseDuration(string duration) =>
         TimeSpan.TryParse(duration, out var parsed) ? parsed : TimeSpan.Zero;
@@ -1646,6 +1650,8 @@ public sealed class QueuedVideoItem : ObservableObject
         get => _channelAvatarPath;
         set => SetProperty(ref _channelAvatarPath, value);
     }
+
+    public DvdAspectRatio AspectRatio { get; set; } = DvdAspectRatio.Wide16x9;
 
     public long EstimatedSizeBytes { get; set; }
 }

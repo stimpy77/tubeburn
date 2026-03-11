@@ -11,7 +11,8 @@ public sealed record YtDlpMetadata(
     string? Channel,
     int? DurationSeconds,
     string? ThumbnailUrl,
-    string? ChannelUrl);
+    string? ChannelUrl,
+    double? AspectRatio = null);
 
 public sealed record MediaPipelineProgress(
     string Url,
@@ -22,7 +23,8 @@ public sealed record MediaPipelineProgress(
     double OverallProgress,
     string? ResolvedTitle = null,
     string? ResolvedChannel = null,
-    int? DurationSeconds = null);
+    int? DurationSeconds = null,
+    double? AspectRatio = null);
 
 public sealed record MediaPipelineResult(
     bool Succeeded,
@@ -158,7 +160,8 @@ public sealed class MediaPipelineService
                                 PhasePercentage(downloadedCount, totalCount, 0.08, phaseStart: 0, phaseSpan: 35),
                                 ResolvedTitle: meta.Title,
                                 ResolvedChannel: meta.Channel,
-                                DurationSeconds: meta.DurationSeconds));
+                                DurationSeconds: meta.DurationSeconds,
+                                AspectRatio: meta.AspectRatio));
                     }
 
                     // Download thumbnail if URL available
@@ -268,7 +271,7 @@ public sealed class MediaPipelineService
                         PhasePercentage(transcodedCount, totalCount, 0.1, phaseStart: 35, phaseSpan: 65)));
 
                 var targetPreset = project.Settings.Standard == VideoStandard.Ntsc ? "ntsc-dvd" : "pal-dvd";
-                var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: true);
+                var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: true, video.AspectRatio);
 
                 var transcodeResult = await RunFfmpegWithProgressAsync(
                     ffmpeg,
@@ -282,7 +285,7 @@ public sealed class MediaPipelineService
 
                 if (transcodeResult.ExitCode != 0)
                 {
-                    var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: false);
+                    var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: false, video.AspectRatio);
 
                     transcodeResult = await RunFfmpegWithProgressAsync(
                         ffmpeg,
@@ -341,6 +344,7 @@ public sealed class MediaPipelineService
             int? duration = null;
             string? thumbnailUrl = null;
             string? channelUrl = null;
+            double? aspectRatio = null;
 
             if (root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 title = titleProp.GetString();
@@ -356,8 +360,10 @@ public sealed class MediaPipelineService
                 channelUrl = chUrlProp.GetString();
             else if (root.TryGetProperty("uploader_url", out var upUrlProp) && upUrlProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 channelUrl = upUrlProp.GetString();
+            if (root.TryGetProperty("aspect_ratio", out var arProp) && arProp.TryGetDouble(out var ar))
+                aspectRatio = ar;
 
-            return new YtDlpMetadata(title, channel, duration, thumbnailUrl, channelUrl);
+            return new YtDlpMetadata(title, channel, duration, thumbnailUrl, channelUrl, aspectRatio);
         }
         catch
         {
@@ -389,7 +395,8 @@ public sealed class MediaPipelineService
         string targetPreset,
         string outputPath,
         int videoBitrateKbps,
-        bool useHardwareAcceleration)
+        bool useHardwareAcceleration,
+        DvdAspectRatio aspectRatio = DvdAspectRatio.Wide16x9)
     {
         var arguments = new List<string>
         {
@@ -410,7 +417,7 @@ public sealed class MediaPipelineService
         arguments.Add("-target");
         arguments.Add(targetPreset);
         arguments.Add("-aspect");
-        arguments.Add("16:9");
+        arguments.Add(aspectRatio == DvdAspectRatio.Standard4x3 ? "4:3" : "16:9");
         arguments.Add("-b:v");
         arguments.Add($"{videoBitrateKbps}k");
         arguments.Add("-maxrate");

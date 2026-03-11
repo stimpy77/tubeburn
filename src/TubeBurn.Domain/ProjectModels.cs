@@ -14,6 +14,12 @@ public enum DiscMediaKind
     Dvd9,
 }
 
+public enum DvdAspectRatio
+{
+    Wide16x9,
+    Standard4x3,
+}
+
 public enum TitleEndBehavior
 {
     PlayNextVideo,
@@ -48,7 +54,8 @@ public sealed record VideoSource(
     TimeSpan Duration,
     string SourcePath,
     string TranscodedPath,
-    long EstimatedSizeBytes = 0);
+    long EstimatedSizeBytes = 0,
+    DvdAspectRatio AspectRatio = DvdAspectRatio.Wide16x9);
 
 public sealed record ChannelProject(
     string Name,

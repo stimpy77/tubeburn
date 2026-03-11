@@ -27,7 +27,7 @@ public static class DvdIfoWriter
     public static byte[] WriteVmgIfo(
         int titleCount,
         VideoStandard standard,
-        byte[] vtsIfoData,
+        IReadOnlyList<byte[]> allVtsIfoData,
         int vtsCount = 1,
         IReadOnlyList<int>? titlesPerVts = null,
         IReadOnlyList<MenuPage>? menuPages = null,
@@ -171,11 +171,12 @@ public static class DvdIfoWriter
 
             var atrt = atrtBase[(8 + vtsCount * 4 + v * 0x308)..];
             Write32(atrt, 0, 0x307);
-            // Copy attributes from first VTS IFO for all entries (simplified)
-            if (vtsIfoData.Length >= 0x26)
-                vtsIfoData.AsSpan(0x22, 4).CopyTo(atrt[4..]);
-            if (vtsIfoData.Length >= 0x400)
-                vtsIfoData.AsSpan(0x100, Math.Min(0x300, vtsIfoData.Length - 0x100)).CopyTo(atrt[8..]);
+            // Copy attributes from the corresponding VTS IFO
+            var vtsIfo = v < allVtsIfoData.Count ? allVtsIfoData[v] : allVtsIfoData[0];
+            if (vtsIfo.Length >= 0x26)
+                vtsIfo.AsSpan(0x22, 4).CopyTo(atrt[4..]);
+            if (vtsIfo.Length >= 0x400)
+                vtsIfo.AsSpan(0x100, Math.Min(0x300, vtsIfo.Length - 0x100)).CopyTo(atrt[8..]);
         }
 
         // ── VMGM_PGCI_UT (channel-select menu PGC) ──────────────
@@ -196,7 +197,7 @@ public static class DvdIfoWriter
         VideoStandard standard,
         byte[] vtsIfoData)
     {
-        return WriteVmgIfo(titleCount, standard, vtsIfoData,
+        return WriteVmgIfo(titleCount, standard, [vtsIfoData],
             vtsCount: 1, titlesPerVts: null, menuPages: null, menuVobSectors: 0);
     }
 
@@ -220,7 +221,8 @@ public static class DvdIfoWriter
         long menuVobSizeBytes = 0,
         TitleEndBehavior endOfVideoAction = TitleEndBehavior.GoToMenu,
         TitleEndBehavior nextChapterAction = TitleEndBehavior.PlayNextVideo,
-        IReadOnlyList<int>? menuPageSectorOffsets = null)
+        IReadOnlyList<int>? menuPageSectorOffsets = null,
+        DvdAspectRatio aspectRatio = DvdAspectRatio.Wide16x9)
     {
         var videoCount = vobFileSizes.Count;
         var fps = standard == VideoStandard.Ntsc ? 30 : 25;
@@ -345,8 +347,8 @@ public static class DvdIfoWriter
             mat[0x156] = 0x01;           // coding mode + type
         }
 
-        // Title video/audio attributes at 0x200
-        WriteVideoAttr(mat[0x200..], standard);
+        // Title video/audio attributes at 0x200 (aspect ratio matches channel content)
+        WriteVideoAttr(mat[0x200..], standard, aspectRatio);
         mat[0x203] = 1;                                       // 1 audio stream
         mat[0x204] = 0x00;                                    // AC3
         mat[0x205] = 0x01;                                    // 48 kHz, 2 ch
@@ -793,13 +795,15 @@ public static class DvdIfoWriter
         }
     }
 
-    private static void WriteVideoAttr(Span<byte> dest, VideoStandard standard)
+    private static void WriteVideoAttr(Span<byte> dest, VideoStandard standard, DvdAspectRatio aspectRatio = DvdAspectRatio.Wide16x9)
     {
-        // bits[15:14]=01 (MPEG-2), bits[13:12]=standard, bits[9:8]=00 (16:9 aspect ratio)
+        // bits[15:14]=01 (MPEG-2), bits[13:12]=standard, bits[9:8]=aspect ratio
         ushort v = 0x4000;
         if (standard == VideoStandard.Pal)
             v |= 0x1000;
-        // 0x0000 for bits[9:8] = 16:9; was 0x0300 = 4:3
+        if (aspectRatio == DvdAspectRatio.Standard4x3)
+            v |= 0x0300; // bits[9:8] = 11 = 4:3
+        // bits[9:8] = 00 = 16:9 (default)
         Write16(dest, 0, v);
     }
 

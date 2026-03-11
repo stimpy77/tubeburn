@@ -17,11 +17,13 @@ public sealed class DvdauthorProjectFileWriter
 
         var xmlPath = Path.Combine(workingDirectory, "project.xml");
 
+        var firstAspect = project.Videos.FirstOrDefault()?.AspectRatio ?? DvdAspectRatio.Wide16x9;
+        var aspectStr = firstAspect == DvdAspectRatio.Standard4x3 ? "4:3" : "16:9";
         var titles = new XElement("titles",
             new XElement(
                 "video",
                 new XAttribute("format", project.Settings.Standard == VideoStandard.Ntsc ? "ntsc" : "pal"),
-                new XAttribute("aspect", "16:9")),
+                new XAttribute("aspect", aspectStr)),
             new XElement(
                 "audio",
                 new XAttribute("format", "ac3"),

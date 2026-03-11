@@ -418,7 +418,7 @@ public sealed class DvdMenuSystemTests
         var vtsIfo = DvdIfoWriter.WriteVtsIfo(VideoStandard.Ntsc, [170_000L, 244_000L]);
 
         var vmgIfo = DvdIfoWriter.WriteVmgIfo(
-            5, VideoStandard.Ntsc, vtsIfo,
+            5, VideoStandard.Ntsc, [vtsIfo],
             vtsCount: 2,
             titlesPerVts: [3, 2]);
 
@@ -449,7 +449,7 @@ public sealed class DvdMenuSystemTests
             [MakeButton(80, 80, 240, 120)], "", MenuPageType.ChannelSelect);
 
         var vmgIfo = DvdIfoWriter.WriteVmgIfo(
-            2, VideoStandard.Ntsc, vtsIfo,
+            2, VideoStandard.Ntsc, [vtsIfo],
             vtsCount: 2,
             titlesPerVts: [1, 1],
             menuPages: [channelMenu],
@@ -470,7 +470,7 @@ public sealed class DvdMenuSystemTests
             [MakeButton(80, 80, 240, 120)], "", MenuPageType.VideoSelect);
 
         var vmgIfo = DvdIfoWriter.WriteVmgIfo(
-            1, VideoStandard.Ntsc, vtsIfo,
+            1, VideoStandard.Ntsc, [vtsIfo],
             vtsCount: 1,
             menuPages: [videoMenu]);
 
@@ -497,6 +497,54 @@ public sealed class DvdMenuSystemTests
         var cmdBase = 0x400 + 0xEC + 8;
         Assert.Equal(0x30, vmgIfo[cmdBase]);
         Assert.Equal(0x02, vmgIfo[cmdBase + 1]);
+    }
+
+    [Fact]
+    public void IfoWriter_vmg_vts_atrt_uses_per_vts_aspect_ratio()
+    {
+        // VTS 1: 4:3, VTS 2: 16:9
+        var vtsIfo4x3 = DvdIfoWriter.WriteVtsIfo(VideoStandard.Ntsc, [170_000L], aspectRatio: DvdAspectRatio.Standard4x3);
+        var vtsIfo16x9 = DvdIfoWriter.WriteVtsIfo(VideoStandard.Ntsc, [244_000L], aspectRatio: DvdAspectRatio.Wide16x9);
+
+        var vmgIfo = DvdIfoWriter.WriteVmgIfo(
+            2, VideoStandard.Ntsc, [vtsIfo4x3, vtsIfo16x9],
+            vtsCount: 2,
+            titlesPerVts: [1, 1]);
+
+        // VTS_ATRT starts at sector 2 (after TT_SRPT at sector 1)
+        var atrtSec = BinaryPrimitives.ReadUInt32BigEndian(vmgIfo.AsSpan(0xD0));
+        var atrtBase = (int)(atrtSec * 2048);
+        var vtsCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(atrtBase));
+        Assert.Equal(2, vtsCount);
+
+        // Each VTS_ATRT entry is 0x308 bytes; offset table starts at atrtBase+8
+        var entryOffset0 = BinaryPrimitives.ReadUInt32BigEndian(vmgIfo.AsSpan(atrtBase + 8));
+        var entryOffset1 = BinaryPrimitives.ReadUInt32BigEndian(vmgIfo.AsSpan(atrtBase + 12));
+
+        // VTS 1 title video attributes at entry+8+0x100 (offset 0x200 in VTS mapped to 0x100 in ATRT)
+        // Actually the ATRT copies bytes 0x100..0x400 from VTS IFO into entry+8
+        // Title video attrs at VTS IFO offset 0x200 map to ATRT entry offset 8 + (0x200-0x100) = 8 + 0x100
+        var vts1VideoAttr = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(atrtBase + (int)entryOffset0 + 8 + 0x100));
+        var vts2VideoAttr = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(atrtBase + (int)entryOffset1 + 8 + 0x100));
+
+        // VTS 1 should have 4:3 (bits 9:8 = 0x0300)
+        Assert.Equal(0x0300, vts1VideoAttr & 0x0300);
+        // VTS 2 should have 16:9 (bits 9:8 = 0x0000)
+        Assert.Equal(0x0000, vts2VideoAttr & 0x0300);
+    }
+
+    [Fact]
+    public void IfoWriter_vts_ifo_writes_correct_aspect_ratio()
+    {
+        var vtsIfo4x3 = DvdIfoWriter.WriteVtsIfo(VideoStandard.Ntsc, [170_000L], aspectRatio: DvdAspectRatio.Standard4x3);
+        var vtsIfo16x9 = DvdIfoWriter.WriteVtsIfo(VideoStandard.Ntsc, [170_000L], aspectRatio: DvdAspectRatio.Wide16x9);
+
+        // Title video attributes at offset 0x200
+        var attr4x3 = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo4x3.AsSpan(0x200));
+        var attr16x9 = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo16x9.AsSpan(0x200));
+
+        Assert.Equal(0x0300, attr4x3 & 0x0300); // 4:3
+        Assert.Equal(0x0000, attr16x9 & 0x0300); // 16:9
     }
 
     // ── Legacy BuildLayouts still works ───────────────────────────

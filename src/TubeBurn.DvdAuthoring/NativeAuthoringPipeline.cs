@@ -104,11 +104,13 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             vobIndex++;
         }
 
-        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets);
+        var channelAspect = request.Project.Videos.FirstOrDefault()?.AspectRatio ?? DvdAspectRatio.Wide16x9;
+        var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets,
+            aspectRatio: channelAspect);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.IFO"), vtsIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VTS_01_0.BUP"), vtsIfo, cancellationToken);
 
-        var vmgIfo = DvdIfoWriter.WriteVmgIfo(vobFileSizes.Count, standard, vtsIfo);
+        var vmgIfo = DvdIfoWriter.WriteVmgIfo(vobFileSizes.Count, standard, [vtsIfo]);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.IFO"), vmgIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.BUP"), vmgIfo, cancellationToken);
 
@@ -211,14 +213,16 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 vobFileIndex++;
             }
 
-            // Write VTS IFO with menu support
+            // Write VTS IFO with menu support — aspect ratio from channel's videos
+            var channelAspect = channel.Videos.FirstOrDefault()?.AspectRatio ?? DvdAspectRatio.Wide16x9;
             var vtsIfo = DvdIfoWriter.WriteVtsIfo(
                 standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets,
                 menuPages: videoMenuPages.Count > 0 ? videoMenuPages : null,
                 menuVobSizeBytes: menuVobSize,
                 endOfVideoAction: project.Settings.EndOfVideoAction,
                 nextChapterAction: useChapters ? project.Settings.NextChapterAction : TitleEndBehavior.GoToMenu,
-                menuPageSectorOffsets: menuPageSectorOffsets.Count > 0 ? menuPageSectorOffsets : null);
+                menuPageSectorOffsets: menuPageSectorOffsets.Count > 0 ? menuPageSectorOffsets : null,
+                aspectRatio: channelAspect);
 
             await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.IFO"), vtsIfo, cancellationToken);
             await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.BUP"), vtsIfo, cancellationToken);
@@ -264,7 +268,7 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         // - GoToMenu: N titles with 1 chapter each
         var vmgTitleCount = titlesPerVts.Sum();
         var vmgIfo = DvdIfoWriter.WriteVmgIfo(
-            vmgTitleCount, standard, allVtsIfos[0],
+            vmgTitleCount, standard, allVtsIfos,
             vtsCount: project.Channels.Count,
             titlesPerVts: titlesPerVts,
             menuPages: channelSelectPages,

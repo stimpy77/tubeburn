@@ -761,7 +761,7 @@ public partial class MainWindow : Window
                     if (item.IsEstimating || string.IsNullOrWhiteSpace(item.Channel))
                     {
                         await Dispatcher.UIThread.InvokeAsync(() =>
-                            ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds));
+                            ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds, meta.AspectRatio));
                     }
 
                     if (!string.IsNullOrWhiteSpace(meta.ThumbnailUrl))
@@ -962,7 +962,7 @@ public partial class MainWindow : Window
 
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
-                        ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds);
+                        ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds, meta.AspectRatio);
                         if (thumbPath is not null)
                             item.ThumbnailPath = thumbPath;
                         if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
@@ -1024,7 +1024,7 @@ public partial class MainWindow : Window
         // Update queue item with resolved metadata from yt-dlp.
         if (progress.ResolvedTitle is not null || progress.ResolvedChannel is not null || progress.DurationSeconds is not null)
         {
-            ViewModel.ApplyResolvedMetadata(progress.Url, progress.ResolvedTitle, progress.ResolvedChannel, progress.DurationSeconds);
+            ViewModel.ApplyResolvedMetadata(progress.Url, progress.ResolvedTitle, progress.ResolvedChannel, progress.DurationSeconds, progress.AspectRatio);
         }
 
         // When a transcode completes for a specific video, update its size from the actual file.
