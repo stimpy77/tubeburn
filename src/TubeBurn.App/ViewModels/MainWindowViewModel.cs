@@ -55,6 +55,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private bool _isPreviewBusy;
     private bool _isMetadataBusy;
     private string _menuTitle = "Select Channel";
+    private bool _normalizeResolution;
+    private bool _normalizeVignette = true;
 
     public MainWindowViewModel()
     {
@@ -347,6 +349,18 @@ public sealed class MainWindowViewModel : ObservableObject
         set => SetProperty(ref _menuTitle, value);
     }
 
+    public bool NormalizeResolution
+    {
+        get => _normalizeResolution;
+        set => SetProperty(ref _normalizeResolution, value);
+    }
+
+    public bool NormalizeVignette
+    {
+        get => _normalizeVignette;
+        set => SetProperty(ref _normalizeVignette, value);
+    }
+
     public string ProjectSummary =>
         $"{Queue.Count} videos queued, {SelectedVideoStandard}, {SelectedDiscType}, output {OutputFolder}";
 
@@ -448,6 +462,8 @@ public sealed class MainWindowViewModel : ObservableObject
         MenuTitle = string.IsNullOrWhiteSpace(project.Settings.MenuTitle) ? "Select Channel" : project.Settings.MenuTitle;
         EndOfVideoGoToMenu = project.Settings.EndOfVideoAction == TitleEndBehavior.GoToMenu;
         NextChapterPlayNext = project.Settings.NextChapterAction == TitleEndBehavior.PlayNextVideo;
+        NormalizeResolution = project.Settings.NormalizeResolution;
+        NormalizeVignette = project.Settings.NormalizeVignette;
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var channel in project.Channels)
@@ -518,7 +534,9 @@ public sealed class MainWindowViewModel : ObservableObject
             BurnDevice: NormalizeBurnDevice(SelectedBurnDrive),
             MenuTitle: MenuTitle,
             EndOfVideoAction: EndOfVideoGoToMenu ? TitleEndBehavior.GoToMenu : TitleEndBehavior.PlayNextVideo,
-            NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu);
+            NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu,
+            NormalizeResolution: NormalizeResolution,
+            NormalizeVignette: NormalizeVignette);
 
         var channels = Queue
             .GroupBy(

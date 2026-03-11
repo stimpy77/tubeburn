@@ -45,7 +45,9 @@ public sealed record ProjectSettings(
     int FontSize = 24,
     string MenuTitle = "Select Channel",
     TitleEndBehavior EndOfVideoAction = TitleEndBehavior.GoToMenu,
-    TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo);
+    TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo,
+    bool NormalizeResolution = false,
+    bool NormalizeVignette = true);
 
 public sealed record VideoSource(
     string Url,

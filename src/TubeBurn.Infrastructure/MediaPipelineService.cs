@@ -115,6 +115,7 @@ public sealed class MediaPipelineService
         var downloadedCount = 0;
         var transcodedCount = 0;
         var resolvedSourcePaths = new Dictionary<VideoSource, string>();
+        var detectedAspectRatios = new Dictionary<string, DvdAspectRatio>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var video in allVideos)
         {
@@ -148,6 +149,11 @@ public sealed class MediaPipelineService
                 if (metadataResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(metadataResult.StandardOutput))
                 {
                     var meta = ParseYtDlpMetadata(metadataResult.StandardOutput);
+
+                    // Track detected aspect ratio for use at transcode time
+                    if (meta.AspectRatio is not null)
+                        detectedAspectRatios[video.Url] = meta.AspectRatio.Value < 1.5 ? DvdAspectRatio.Standard4x3 : DvdAspectRatio.Wide16x9;
+
                     if (meta.Title is not null || meta.Channel is not null || meta.DurationSeconds is not null)
                     {
                         onProgress?.Invoke(
@@ -249,62 +255,119 @@ public sealed class MediaPipelineService
         var manifest = TranscodeManifest.Load(transcodeDirectory);
         var bitrateKbps = project.Settings.VideoBitrateKbps;
 
+        // Pre-compute which videos need blur-fill normalization.
+        // Must happen before the transcode loop because blur-fill must use the
+        // original source file — the transcoded DVD file is always 720×480 regardless
+        // of aspect ratio, so post-transcode blur-fill has no visible effect.
+        var videosNeedingBlurFill = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (project.Settings.NormalizeResolution)
+        {
+            DvdAspectRatio EffectiveAspect(VideoSource v) =>
+                detectedAspectRatios.GetValueOrDefault(v.Url, v.AspectRatio);
+
+            foreach (var channel in project.Channels)
+            {
+                var has16x9 = channel.Videos.Any(v => EffectiveAspect(v) == DvdAspectRatio.Wide16x9);
+                var hasNon16x9 = channel.Videos.Any(v => EffectiveAspect(v) != DvdAspectRatio.Wide16x9);
+
+                if (!has16x9 || !hasNon16x9)
+                    continue; // All same ratio in this channel — nothing to normalize
+
+                foreach (var v in channel.Videos.Where(v => EffectiveAspect(v) != DvdAspectRatio.Wide16x9))
+                    videosNeedingBlurFill.Add(v.Url);
+            }
+        }
+
         foreach (var video in allVideos)
         {
             var sourcePath = resolvedSourcePaths[video];
-            if (manifest.IsCacheValid(video.TranscodedPath, video.Url, bitrateKbps))
+            var needsBlurFill = videosNeedingBlurFill.Contains(video.Url);
+
+            // Cache doesn't track normalize state, so always re-transcode blur-fill videos.
+            if (manifest.IsCacheValid(video.TranscodedPath, video.Url, bitrateKbps) && !needsBlurFill)
             {
                 // Cached transcode matches current settings — skip.
             }
             else
             {
-                // Delete stale cached file if it exists at a different bitrate.
+                // Delete stale cached file.
                 if (File.Exists(video.TranscodedPath))
                     File.Delete(video.TranscodedPath);
-                onProgress?.Invoke(
-                    new MediaPipelineProgress(
-                        video.Url,
-                        "Transcode",
-                        "Active",
-                        "Transcoding to DVD-compliant MPEG-2.",
-                        55,
-                        PhasePercentage(transcodedCount, totalCount, 0.1, phaseStart: 35, phaseSpan: 65)));
 
                 var targetPreset = project.Settings.Standard == VideoStandard.Ntsc ? "ntsc-dvd" : "pal-dvd";
-                var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: true, video.AspectRatio);
 
-                var transcodeResult = await RunFfmpegWithProgressAsync(
-                    ffmpeg,
-                    transcodeArgs,
-                    workingDirectory,
-                    video,
-                    transcodedCount,
-                    totalCount,
-                    onProgress,
-                    cancellationToken);
-
-                if (transcodeResult.ExitCode != 0)
+                if (needsBlurFill)
                 {
-                    var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: false, video.AspectRatio);
+                    onProgress?.Invoke(
+                        new MediaPipelineProgress(
+                            video.Url,
+                            "Transcode",
+                            "Active",
+                            $"Blur-fill normalizing '{video.Title}' to 16:9.",
+                            55,
+                            PhasePercentage(transcodedCount, totalCount, 0.1, phaseStart: 35, phaseSpan: 65)));
 
-                    transcodeResult = await RunFfmpegWithProgressAsync(
+                    var blurFillArgs = BuildBlurFillArguments(
+                        sourcePath, video.TranscodedPath, targetPreset, bitrateKbps,
+                        project.Settings.NormalizeVignette, project.Settings.Standard);
+
+                    var blurResult = await _toolRunner.RunAsync(ffmpeg, blurFillArgs, workingDirectory, cancellationToken);
+                    if (blurResult.ExitCode != 0)
+                    {
+                        return new MediaPipelineResult(
+                            false,
+                            $"Blur-fill normalization failed for '{video.Title}' (exit {blurResult.ExitCode}). {ExtractFailureReason(blurResult)}",
+                            "Transcode",
+                            video.Url);
+                    }
+                }
+                else
+                {
+                    onProgress?.Invoke(
+                        new MediaPipelineProgress(
+                            video.Url,
+                            "Transcode",
+                            "Active",
+                            "Transcoding to DVD-compliant MPEG-2.",
+                            55,
+                            PhasePercentage(transcodedCount, totalCount, 0.1, phaseStart: 35, phaseSpan: 65)));
+
+                    var effectiveAspect = detectedAspectRatios.GetValueOrDefault(video.Url, video.AspectRatio);
+                    var transcodeArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: true, effectiveAspect);
+
+                    var transcodeResult = await RunFfmpegWithProgressAsync(
                         ffmpeg,
-                        softwareArgs,
+                        transcodeArgs,
                         workingDirectory,
                         video,
                         transcodedCount,
                         totalCount,
                         onProgress,
                         cancellationToken);
-                }
 
-                if (transcodeResult.ExitCode != 0)
-                {
-                    return new MediaPipelineResult(
-                        false,
-                        $"ffmpeg failed for '{video.Title}' (exit {transcodeResult.ExitCode}). {ExtractFailureReason(transcodeResult)}",
-                        "Transcode",
-                        video.Url);
+                    if (transcodeResult.ExitCode != 0)
+                    {
+                        var softwareArgs = BuildTranscodeArguments(sourcePath, targetPreset, video.TranscodedPath, bitrateKbps, useHardwareAcceleration: false, effectiveAspect);
+
+                        transcodeResult = await RunFfmpegWithProgressAsync(
+                            ffmpeg,
+                            softwareArgs,
+                            workingDirectory,
+                            video,
+                            transcodedCount,
+                            totalCount,
+                            onProgress,
+                            cancellationToken);
+                    }
+
+                    if (transcodeResult.ExitCode != 0)
+                    {
+                        return new MediaPipelineResult(
+                            false,
+                            $"ffmpeg failed for '{video.Title}' (exit {transcodeResult.ExitCode}). {ExtractFailureReason(transcodeResult)}",
+                            "Transcode",
+                            video.Url);
+                    }
                 }
 
                 manifest.RecordEntry(video.TranscodedPath, video.Url, bitrateKbps);
@@ -324,6 +387,54 @@ public sealed class MediaPipelineService
         manifest.Save(transcodeDirectory);
 
         return new MediaPipelineResult(true, "Download and transcode preparation completed.");
+    }
+
+    /// <summary>
+    /// Builds ffmpeg arguments for blur-fill normalization from the original source video.
+    /// Works in square-pixel space to correctly preserve the source aspect ratio:
+    ///   1. Normalize source to square pixels (handles anamorphic sources)
+    ///   2. Scale+crop a blurred copy to fill the 16:9 display area
+    ///   3. Scale the foreground to fit within the display area (preserving AR)
+    ///   4. Overlay foreground centered on blurred background
+    ///   5. Scale to DVD resolution (720×480/576) — the non-square DVD pixels
+    ///      combined with the 16:9 aspect flag reconstruct the correct display
+    /// </summary>
+    internal static List<string> BuildBlurFillArguments(
+        string inputPath, string outputPath, string targetPreset,
+        int videoBitrateKbps, bool applyVignette, VideoStandard standard)
+    {
+        // Square-pixel display dimensions for 16:9 DVD frame:
+        //   NTSC 720×480 at SAR 32:27 → 854×480 display
+        //   PAL  720×576 at SAR 64:45 → 1024×576 display
+        var (displayWidth, frameHeight) = standard == VideoStandard.Ntsc ? (854, 480) : (1024, 576);
+        var vignetteFilter = applyVignette ? ",vignette=PI/4" : "";
+
+        var filterComplex =
+            // Normalize source to square pixels so pixel dimensions = display dimensions
+            $"[0:v]setsar=1,scale=trunc(iw*sar/2)*2:ih,split[bg][fg];" +
+            // Background: scale to fill, crop, blur
+            $"[bg]scale={displayWidth}:{frameHeight}:force_original_aspect_ratio=increase," +
+            $"crop={displayWidth}:{frameHeight},gblur=sigma=20{vignetteFilter}[blurred];" +
+            // Foreground: scale to fit within display area, preserving aspect ratio
+            $"[fg]scale={displayWidth}:{frameHeight}:force_original_aspect_ratio=decrease[scaled];" +
+            // Composite and scale back to DVD pixel dimensions
+            $"[blurred][scaled]overlay=(W-w)/2:(H-h)/2[comp];" +
+            $"[comp]scale=720:{frameHeight}[out]";
+
+        return
+        [
+            "-y",
+            "-i", inputPath,
+            "-filter_complex", filterComplex,
+            "-map", "[out]",
+            "-map", "0:a?",
+            "-target", targetPreset,
+            "-aspect", "16:9",
+            "-b:v", $"{videoBitrateKbps}k",
+            "-maxrate", $"{videoBitrateKbps}k",
+            "-bufsize", $"{videoBitrateKbps * 2}k",
+            outputPath,
+        ];
     }
 
     private static double PhasePercentage(int complete, int total, double offsetWithinItem, double phaseStart, double phaseSpan)
