@@ -671,14 +671,17 @@ public partial class MainWindow : Window
         // Render immediately with whatever we have
         ViewModel.GenerateMenuPreview();
 
-        // Then download missing thumbnails and re-render
-        var hadMissing = ViewModel.Queue.Any(item => string.IsNullOrWhiteSpace(item.ThumbnailPath));
-        if (hadMissing)
+        // Then download missing thumbnails/channel banners and re-render
+        var hadMissingAssets = ViewModel.Queue.Any(item =>
+            string.IsNullOrWhiteSpace(item.ThumbnailPath) ||
+            string.IsNullOrWhiteSpace(item.ChannelBannerPath));
+        if (hadMissingAssets)
         {
             ViewModel.IsPreviewBusy = true;
             try
             {
                 await EnsureThumbnailsDownloadedAsync();
+
                 ViewModel.GenerateMenuPreview();
             }
             finally
@@ -870,21 +873,19 @@ public partial class MainWindow : Window
 
             await process.WaitForExitAsync();
 
-            // yt-dlp writes files like: channel.banner_uncropped.jpg, channel.avatar_uncropped.jpg
-            string? bannerPath = null;
-            string? avatarPath = null;
+            // yt-dlp thumbnail naming varies by extractor/version. Prefer explicit names first,
+            // then broader banner/avatar matches in the same output directory.
+            var bannerPath = FindDownloadedChannelImage(outputDir,
+                "channel.banner_uncropped.*",
+                "channel.banner.*",
+                "*banner_uncropped*",
+                "*banner*");
 
-            foreach (var file in Directory.EnumerateFiles(outputDir, "channel.banner_uncropped.*"))
-            {
-                bannerPath = file;
-                break;
-            }
-
-            foreach (var file in Directory.EnumerateFiles(outputDir, "channel.avatar_uncropped.*"))
-            {
-                avatarPath = file;
-                break;
-            }
+            var avatarPath = FindDownloadedChannelImage(outputDir,
+                "channel.avatar_uncropped.*",
+                "channel.avatar.*",
+                "*avatar_uncropped*",
+                "*avatar*");
 
             return (bannerPath, avatarPath);
         }
@@ -892,6 +893,21 @@ public partial class MainWindow : Window
         {
             return (null, null);
         }
+    }
+
+    private static string? FindDownloadedChannelImage(string outputDir, params string[] patterns)
+    {
+        foreach (var pattern in patterns)
+        {
+            var match = Directory.EnumerateFiles(outputDir, pattern)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(match))
+                return match;
+        }
+
+        return null;
     }
 
     private async Task FetchMetadataForEstimatingItemsAsync()

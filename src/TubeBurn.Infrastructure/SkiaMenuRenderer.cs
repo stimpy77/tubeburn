@@ -65,17 +65,27 @@ public static class SkiaMenuRenderer
 
     /// <summary>
     /// Renders menu to PNG bytes (for UI preview without ffmpeg encoding).
+    /// Output is stretched to 16:9 display aspect ratio to match how DVD players render it.
     /// </summary>
     public static byte[] RenderPreview(MenuPage page, VideoStandard standard)
     {
         var width = 720;
         var height = standard == VideoStandard.Ntsc ? 480 : 576;
 
+        // Render at DVD storage resolution
         using var bitmap = new SKBitmap(width, height);
         using var canvas = new SKCanvas(bitmap);
         RenderToCanvas(canvas, page, width, height);
 
-        using var image = SKImage.FromBitmap(bitmap);
+        // Stretch to 16:9 display aspect ratio (PAR 40:33 for NTSC, 16:11 for PAL)
+        var displayWidth = standard == VideoStandard.Ntsc
+            ? (int)(width * 40.0 / 33.0)  // 873px
+            : (int)(width * 16.0 / 11.0); // 1047px
+        using var stretched = new SKBitmap(displayWidth, height);
+        using var stretchCanvas = new SKCanvas(stretched);
+        stretchCanvas.DrawBitmap(bitmap, new SKRect(0, 0, displayWidth, height));
+
+        using var image = SKImage.FromBitmap(stretched);
         using var data = image.Encode(SKEncodedImageFormat.Png, 90);
         return data.ToArray();
     }
@@ -313,8 +323,8 @@ public static class SkiaMenuRenderer
     {
         var destRect = new SKRect(0, 0, width, height);
 
-        // Draw with gaussian blur filter — sigma 12 gives a soft, recognizable blur
-        using var blurFilter = SKImageFilter.CreateBlur(12f, 12f);
+        // Draw with gaussian blur filter — sigma 6 gives a gentle blur, banner still recognizable
+        using var blurFilter = SKImageFilter.CreateBlur(6f, 6f);
         using var paint = new SKPaint { IsAntialias = true, ImageFilter = blurFilter };
         canvas.DrawBitmap(source, destRect, paint);
     }
