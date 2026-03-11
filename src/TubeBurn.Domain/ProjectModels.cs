@@ -104,7 +104,8 @@ public sealed record MenuButton(
     string Label,
     ButtonNavigation Navigation,
     DvdButtonCommand ActivateCommand,
-    string? ThumbnailPath = null);
+    string? ThumbnailPath = null,
+    string? BannerImagePath = null);
 
 public sealed record MenuPage(
     string MenuId,

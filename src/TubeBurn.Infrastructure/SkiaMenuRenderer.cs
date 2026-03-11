@@ -169,9 +169,34 @@ public static class SkiaMenuRenderer
         foreach (var button in page.Buttons)
         {
             var rowRect = new SKRect(button.X, button.Y, button.X + button.Width, button.Y + button.Height);
+            var rowRRect = new SKRoundRect(rowRect, 4, 4);
+
+            // Banner background inside the row (scale-to-fit) with adaptive text color
+            var hasBanner = false;
+            var isDarkBanner = false;
+            var bannerBitmap = LoadImage(button.BannerImagePath);
+            if (bannerBitmap is not null)
+            {
+                hasBanner = true;
+                isDarkBanner = IsDarkImage(bannerBitmap);
+
+                canvas.Save();
+                canvas.ClipRoundRect(rowRRect);
+                DrawScaleToFit(canvas, bannerBitmap, rowRect);
+                bannerBitmap.Dispose();
+
+                // Semi-transparent overlay to soften the banner
+                var overlayAlpha = (byte)120;
+                var overlayColor = isDarkBanner
+                    ? new SKColor(0, 0, 0, overlayAlpha)
+                    : new SKColor(255, 255, 255, overlayAlpha);
+                using var dimPaint = new SKPaint { Color = overlayColor };
+                canvas.DrawRect(rowRect, dimPaint);
+                canvas.Restore();
+            }
 
             // Row border
-            canvas.DrawRoundRect(rowRect, 4, 4, borderPaint);
+            canvas.DrawRoundRect(rowRRect, borderPaint);
 
             // Circle avatar
             var avatarCx = button.X + 12 + AvatarDiameter / 2f;
@@ -188,12 +213,23 @@ public static class SkiaMenuRenderer
                 DrawLetterCircle(canvas, button.Label, avatarCx, avatarCy, AvatarDiameter / 2f, typeface);
             }
 
-            // Channel name
+            // Channel name — adaptive color based on banner brightness
+            var textColor = hasBanner && isDarkBanner ? SKColors.White : L1TextColor;
+            var shadowColor = hasBanner && isDarkBanner
+                ? new SKColor(0, 0, 0, 160)
+                : new SKColor(255, 255, 255, 160);
+
             var textX = button.X + 12 + AvatarDiameter + 12;
             var textY = button.Y + (button.Height + 22f) / 2f;
             var maxTextWidth = button.Width - (12 + AvatarDiameter + 12 + 8); // right padding
             var label = FitText(button.Label, labelFont, maxTextWidth);
-            canvas.DrawText(label, textX, textY, SKTextAlign.Left, labelFont, labelPaint);
+
+            // Drop shadow (inverse of text color)
+            using var shadowPaint = new SKPaint { Color = shadowColor, IsAntialias = true };
+            canvas.DrawText(label, textX + 1, textY + 1, SKTextAlign.Left, labelFont, shadowPaint);
+
+            using var textPaint = new SKPaint { Color = textColor, IsAntialias = true };
+            canvas.DrawText(label, textX, textY, SKTextAlign.Left, labelFont, textPaint);
         }
     }
 
@@ -317,6 +353,49 @@ public static class SkiaMenuRenderer
         using var letterFont = new SKFont(typeface, radius * 1.2f);
         using var letterPaint = new SKPaint { Color = SKColors.White, IsAntialias = true };
         canvas.DrawText(letter, cx, cy + radius * 0.4f, SKTextAlign.Center, letterFont, letterPaint);
+    }
+
+    /// <summary>
+    /// Draws the source bitmap scaled to fill the dest rect (no stretching),
+    /// cropping the excess dimension to center the image.
+    /// </summary>
+    private static void DrawScaleToFit(SKCanvas canvas, SKBitmap source, SKRect dest)
+    {
+        var destW = dest.Width;
+        var destH = dest.Height;
+        var scaleX = destW / source.Width;
+        var scaleY = destH / source.Height;
+        var scale = Math.Max(scaleX, scaleY); // fill (cover), crop excess
+
+        var srcW = destW / scale;
+        var srcH = destH / scale;
+        var srcX = (source.Width - srcW) / 2f;
+        var srcY = (source.Height - srcH) / 2f;
+        var srcRect = new SKRect(srcX, srcY, srcX + srcW, srcY + srcH);
+
+        canvas.DrawBitmap(source, srcRect, dest);
+    }
+
+    /// <summary>
+    /// Samples the image to determine if it's predominantly dark (average luminance &lt; 128).
+    /// </summary>
+    private static bool IsDarkImage(SKBitmap bitmap)
+    {
+        // Sample every 16th pixel for speed
+        long totalLuminance = 0;
+        var sampleCount = 0;
+        for (var y = 0; y < bitmap.Height; y += 16)
+        {
+            for (var x = 0; x < bitmap.Width; x += 16)
+            {
+                var pixel = bitmap.GetPixel(x, y);
+                // Perceived luminance: 0.299R + 0.587G + 0.114B
+                totalLuminance += (int)(pixel.Red * 0.299 + pixel.Green * 0.587 + pixel.Blue * 0.114);
+                sampleCount++;
+            }
+        }
+
+        return sampleCount > 0 && totalLuminance / sampleCount < 128;
     }
 
     private static void DrawBlurredBackground(SKCanvas canvas, SKBitmap source, int width, int height)

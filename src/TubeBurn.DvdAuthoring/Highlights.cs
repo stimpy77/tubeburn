@@ -177,7 +177,8 @@ public sealed class MenuHighlightPlanner
                 channels[i].Name,
                 default!,
                 new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, vtsNumber),
-                ThumbnailPath: channels[i].AvatarImagePath));
+                ThumbnailPath: channels[i].AvatarImagePath,
+                BannerImagePath: channels[i].BannerImagePath));
         }
 
         buttons = AssignNavigation(buttons);
