@@ -37,6 +37,7 @@ public sealed record ProjectSettings(
     string? BurnDevice = null,
     string FontFamily = "Open Sans Condensed SemiBold",
     int FontSize = 24,
+    string MenuTitle = "Select Channel",
     TitleEndBehavior EndOfVideoAction = TitleEndBehavior.GoToMenu,
     TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo);
 

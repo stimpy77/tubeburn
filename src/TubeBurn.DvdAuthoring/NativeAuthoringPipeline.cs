@@ -247,7 +247,7 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         if (isMultiChannel)
         {
             // Build channel-select menu
-            var channelPage = _highlightPlanner.BuildChannelSelectPage(project.Channels);
+            var channelPage = _highlightPlanner.BuildChannelSelectPage(project.Channels, project.Settings.MenuTitle);
             channelSelectPages = [channelPage];
 
             var bgPath = await MenuRenderer!(menuWorkDir, channelPage, standard, cancellationToken);

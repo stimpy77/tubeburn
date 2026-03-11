@@ -1,9 +1,17 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http;
 using System.Text;
 using TubeBurn.Domain;
 
 namespace TubeBurn.Infrastructure;
+
+public sealed record YtDlpMetadata(
+    string? Title,
+    string? Channel,
+    int? DurationSeconds,
+    string? ThumbnailUrl,
+    string? ChannelUrl);
 
 public sealed record MediaPipelineProgress(
     string Url,
@@ -21,6 +29,47 @@ public sealed record MediaPipelineResult(
     string Summary,
     string? FailedStage = null,
     string? FailedUrl = null);
+
+/// <summary>
+/// Downloads thumbnail images from URLs to local files.
+/// </summary>
+public static class ThumbnailDownloader
+{
+    private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    /// <summary>
+    /// Downloads an image from <paramref name="url"/> to <paramref name="outputPath"/>.
+    /// Returns the output path on success, null on failure.
+    /// </summary>
+    public static async Task<string?> DownloadAsync(string url, string outputPath, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return null;
+
+        // Skip if already downloaded
+        if (File.Exists(outputPath))
+            return outputPath;
+
+        try
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(dir))
+                Directory.CreateDirectory(dir);
+
+            using var response = await HttpClient.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            await using var fileStream = File.Create(outputPath);
+            await response.Content.CopyToAsync(fileStream, ct);
+            return outputPath;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
 
 public sealed class MediaPipelineService
 {
@@ -96,20 +145,29 @@ public sealed class MediaPipelineService
                 var metadataResult = await _toolRunner.RunAsync(ytDlp, metadataArgs, workingDirectory, cancellationToken);
                 if (metadataResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(metadataResult.StandardOutput))
                 {
-                    var (title, channel, durationSec) = ParseYtDlpMetadata(metadataResult.StandardOutput);
-                    if (title is not null || channel is not null || durationSec is not null)
+                    var meta = ParseYtDlpMetadata(metadataResult.StandardOutput);
+                    if (meta.Title is not null || meta.Channel is not null || meta.DurationSeconds is not null)
                     {
                         onProgress?.Invoke(
                             new MediaPipelineProgress(
                                 video.Url,
                                 "Download",
                                 "Active",
-                                $"Metadata resolved: {title ?? video.Title}",
+                                $"Metadata resolved: {meta.Title ?? video.Title}",
                                 8,
                                 PhasePercentage(downloadedCount, totalCount, 0.08, phaseStart: 0, phaseSpan: 35),
-                                ResolvedTitle: title,
-                                ResolvedChannel: channel,
-                                DurationSeconds: durationSec));
+                                ResolvedTitle: meta.Title,
+                                ResolvedChannel: meta.Channel,
+                                DurationSeconds: meta.DurationSeconds));
+                    }
+
+                    // Download thumbnail if URL available
+                    if (!string.IsNullOrWhiteSpace(meta.ThumbnailUrl) && string.IsNullOrWhiteSpace(video.ThumbnailPath))
+                    {
+                        var thumbDir = Path.Combine(workingDirectory, "thumbnails");
+                        var thumbSlug = Path.GetFileNameWithoutExtension(video.SourcePath);
+                        var thumbPath = Path.Combine(thumbDir, $"{thumbSlug}.jpg");
+                        await ThumbnailDownloader.DownloadAsync(meta.ThumbnailUrl, thumbPath, cancellationToken);
                     }
                 }
             }
@@ -271,7 +329,7 @@ public sealed class MediaPipelineService
         return Math.Clamp(value, 0, 100);
     }
 
-    public static (string? Title, string? Channel, int? DurationSeconds) ParseYtDlpMetadata(string json)
+    public static YtDlpMetadata ParseYtDlpMetadata(string json)
     {
         try
         {
@@ -281,6 +339,8 @@ public sealed class MediaPipelineService
             string? title = null;
             string? channel = null;
             int? duration = null;
+            string? thumbnailUrl = null;
+            string? channelUrl = null;
 
             if (root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 title = titleProp.GetString();
@@ -290,12 +350,18 @@ public sealed class MediaPipelineService
                 channel = uploaderProp.GetString();
             if (root.TryGetProperty("duration", out var durationProp) && durationProp.TryGetInt32(out var dur))
                 duration = dur;
+            if (root.TryGetProperty("thumbnail", out var thumbProp) && thumbProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                thumbnailUrl = thumbProp.GetString();
+            if (root.TryGetProperty("channel_url", out var chUrlProp) && chUrlProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                channelUrl = chUrlProp.GetString();
+            else if (root.TryGetProperty("uploader_url", out var upUrlProp) && upUrlProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                channelUrl = upUrlProp.GetString();
 
-            return (title, channel, duration);
+            return new YtDlpMetadata(title, channel, duration, thumbnailUrl, channelUrl);
         }
         catch
         {
-            return (null, null, null);
+            return new YtDlpMetadata(null, null, null, null, null);
         }
     }
 

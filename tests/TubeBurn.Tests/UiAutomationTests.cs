@@ -4,6 +4,8 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Interactivity;
 using TubeBurn.App;
 using TubeBurn.App.ViewModels;
+using TubeBurn.Domain;
+using TubeBurn.DvdAuthoring;
 
 namespace TubeBurn.Tests;
 
@@ -134,6 +136,43 @@ public sealed class UiAutomationTests
         Click(window, "BrowseOutputFolderButton");
 
         Assert.False(string.IsNullOrWhiteSpace(viewModel.BuildStatus));
+    }
+
+    [AvaloniaFact]
+    public void Main_menu_channel_items_use_channel_avatar_from_loaded_project()
+    {
+        var window = CreateWindow();
+        var viewModel = (MainWindowViewModel)window.DataContext!;
+
+        var project = new TubeBurnProject(
+            "Avatar Regression",
+            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, Path.GetTempPath()),
+            [
+                new ChannelProject(
+                    "Channel A",
+                    "banner-a.jpg",
+                    "avatar-a.jpg",
+                    [new VideoSource("https://example.com/a1", "A1", "thumb-a1.jpg", TimeSpan.FromMinutes(5), "a1.mp4", "a1.mpg")]),
+                new ChannelProject(
+                    "Channel B",
+                    "banner-b.jpg",
+                    "avatar-b.jpg",
+                    [new VideoSource("https://example.com/b1", "B1", "thumb-b1.jpg", TimeSpan.FromMinutes(6), "b1.mp4", "b1.mpg")]),
+            ]);
+
+        viewModel.LoadProject(project);
+        var rebuilt = viewModel.BuildProject();
+
+        Assert.Equal("banner-a.jpg", rebuilt.Channels[0].BannerImagePath);
+        Assert.Equal("avatar-a.jpg", rebuilt.Channels[0].AvatarImagePath);
+        Assert.Equal("banner-b.jpg", rebuilt.Channels[1].BannerImagePath);
+        Assert.Equal("avatar-b.jpg", rebuilt.Channels[1].AvatarImagePath);
+
+        var planner = new MenuHighlightPlanner();
+        var channelSelectPage = planner.BuildChannelSelectPage(rebuilt.Channels, "Select Channel");
+
+        Assert.Equal("avatar-a.jpg", channelSelectPage.Buttons[0].ThumbnailPath);
+        Assert.Equal("avatar-b.jpg", channelSelectPage.Buttons[1].ThumbnailPath);
     }
 
     private static MainWindow CreateWindow()

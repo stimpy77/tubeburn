@@ -87,13 +87,26 @@ public partial class MainWindow : Window
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync();
         ViewModel.ImportUrlsFromText(content);
-        _ = FetchMetadataForEstimatingItemsAsync();
+        _ = FetchMetadataWithBusyAsync();
     }
 
     private void OnAddUrlsClick(object? sender, RoutedEventArgs e)
     {
         ViewModel.AddPendingUrlsToQueue();
-        _ = FetchMetadataForEstimatingItemsAsync();
+        _ = FetchMetadataWithBusyAsync();
+    }
+
+    private async Task FetchMetadataWithBusyAsync()
+    {
+        ViewModel.IsMetadataBusy = true;
+        try
+        {
+            await FetchMetadataForEstimatingItemsAsync();
+        }
+        finally
+        {
+            ViewModel.IsMetadataBusy = false;
+        }
     }
 
     private async void OnChooseOutputFolderClick(object? sender, RoutedEventArgs e)
@@ -301,7 +314,7 @@ public partial class MainWindow : Window
         ViewModel.RefreshEstimatedSizesFromDisk();
         ClearPendingBurnRetryContext();
         AppLog.Info($"Project loaded: {path}");
-        _ = FetchMetadataForEstimatingItemsAsync();
+        _ = FetchMetadataWithBusyAsync();
     }
 
     private void OnStopBuildClick(object? sender, RoutedEventArgs e)
@@ -653,7 +666,27 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPreviewMenuClick(object? sender, RoutedEventArgs e) => ViewModel.GenerateMenuPreview();
+    private async void OnPreviewMenuClick(object? sender, RoutedEventArgs e)
+    {
+        // Render immediately with whatever we have
+        ViewModel.GenerateMenuPreview();
+
+        // Then download missing thumbnails and re-render
+        var hadMissing = ViewModel.Queue.Any(item => string.IsNullOrWhiteSpace(item.ThumbnailPath));
+        if (hadMissing)
+        {
+            ViewModel.IsPreviewBusy = true;
+            try
+            {
+                await EnsureThumbnailsDownloadedAsync();
+                ViewModel.GenerateMenuPreview();
+            }
+            finally
+            {
+                ViewModel.IsPreviewBusy = false;
+            }
+        }
+    }
 
     private void OnPreviewPrevClick(object? sender, RoutedEventArgs e) => ViewModel.PreviewPrevPage();
 
@@ -685,6 +718,179 @@ public partial class MainWindow : Window
         {
             ViewModel.EndBusy($"Unable to open logs folder: {ex.Message}");
             AppLog.Error("Failed to open logs folder.", ex);
+        }
+    }
+
+    private async Task EnsureThumbnailsDownloadedAsync()
+    {
+        var ytDlpResolution = ExternalToolPathResolver.Resolve("yt-dlp", ViewModel.YtDlpToolPath);
+        if (ytDlpResolution.ResolvedPath is not { } ytDlp)
+        {
+            ViewModel.AddRecentActivity("Cannot download thumbnails: yt-dlp not found.");
+            return;
+        }
+
+        var toolRunner = new ProcessExternalToolRunner();
+        var workingDir = string.IsNullOrWhiteSpace(ViewModel.OutputFolder)
+            ? Path.GetTempPath()
+            : ViewModel.OutputFolder;
+
+        // Download missing video thumbnails
+        var itemsMissingThumbs = ViewModel.Queue
+            .Where(item => string.IsNullOrWhiteSpace(item.ThumbnailPath))
+            .ToList();
+
+        if (itemsMissingThumbs.Count > 0)
+        {
+            ViewModel.BuildStatus = "Downloading thumbnails...";
+
+            foreach (var item in itemsMissingThumbs)
+            {
+                try
+                {
+                    var args = new List<string> { "--no-playlist", "--dump-json", "--no-download", item.Url };
+                    var result = await toolRunner.RunAsync(ytDlp, args, workingDir, CancellationToken.None);
+                    if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StandardOutput))
+                        continue;
+
+                    var meta = MediaPipelineService.ParseYtDlpMetadata(result.StandardOutput);
+
+                    if (item.IsEstimating || string.IsNullOrWhiteSpace(item.Channel))
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                            ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds));
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(meta.ThumbnailUrl))
+                    {
+                        var thumbDir = Path.Combine(workingDir, "thumbnails");
+                        var thumbSlug = Path.GetFileNameWithoutExtension(item.SourcePath);
+                        var thumbPath = await ThumbnailDownloader.DownloadAsync(
+                            meta.ThumbnailUrl,
+                            Path.Combine(thumbDir, $"{thumbSlug}.jpg"));
+
+                        if (thumbPath is not null)
+                        {
+                            await Dispatcher.UIThread.InvokeAsync(() => item.ThumbnailPath = thumbPath);
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() => item.ChannelUrl = meta.ChannelUrl);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Warn($"Thumbnail download failed for {item.Url}: {ex.Message}");
+                }
+            }
+        }
+
+        // Always attempt channel banners (may have thumbnails but missing banners)
+        ViewModel.BuildStatus = "Downloading channel banners...";
+        await DownloadChannelBannersAsync(workingDir);
+
+        ViewModel.BuildStatus = "Thumbnails ready.";
+    }
+
+    private async Task DownloadChannelBannersAsync(string workingDir)
+    {
+        var ytDlpResolution = ExternalToolPathResolver.Resolve("yt-dlp", ViewModel.YtDlpToolPath);
+        if (ytDlpResolution.ResolvedPath is not { } ytDlp)
+            return;
+
+        var channelGroups = ViewModel.Queue
+            .Where(item => !string.IsNullOrWhiteSpace(item.ChannelUrl) && string.IsNullOrWhiteSpace(item.ChannelBannerPath))
+            .GroupBy(item => item.ChannelUrl, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (channelGroups.Count == 0)
+            return;
+
+        var channelDir = Path.Combine(workingDir, "channels");
+        Directory.CreateDirectory(channelDir);
+
+        foreach (var group in channelGroups)
+        {
+            try
+            {
+                var channelUrl = group.Key;
+                var channelSlug = MainWindowViewModel.Slugify(group.First().Channel ?? "channel");
+                var bannerDir = Path.Combine(channelDir, channelSlug);
+                Directory.CreateDirectory(bannerDir);
+
+                var (bannerPath, avatarPath) = await DownloadChannelImagesViaYtDlpAsync(ytDlp, channelUrl, bannerDir);
+
+                if (bannerPath is not null || avatarPath is not null)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        foreach (var item in group)
+                        {
+                            if (bannerPath is not null)
+                                item.ChannelBannerPath = bannerPath;
+                            if (avatarPath is not null && string.IsNullOrWhiteSpace(item.ChannelAvatarPath))
+                                item.ChannelAvatarPath = avatarPath;
+                        }
+                    });
+                    AppLog.Info($"Channel images downloaded for {channelSlug}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"Channel banner download failed: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Uses yt-dlp --write-all-thumbnails --skip-download --playlist-items 0 to download
+    /// channel banner and avatar images directly.
+    /// </summary>
+    private static async Task<(string? BannerPath, string? AvatarPath)> DownloadChannelImagesViaYtDlpAsync(
+        string ytDlpPath, string channelUrl, string outputDir)
+    {
+        try
+        {
+            var outputTemplate = Path.Combine(outputDir, "channel");
+            var psi = new ProcessStartInfo
+            {
+                FileName = ytDlpPath,
+                Arguments = $"--write-all-thumbnails --skip-download --playlist-items 0 \"{channelUrl}\" -o \"{outputTemplate}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            using var process = Process.Start(psi);
+            if (process is null)
+                return (null, null);
+
+            await process.WaitForExitAsync();
+
+            // yt-dlp writes files like: channel.banner_uncropped.jpg, channel.avatar_uncropped.jpg
+            string? bannerPath = null;
+            string? avatarPath = null;
+
+            foreach (var file in Directory.EnumerateFiles(outputDir, "channel.banner_uncropped.*"))
+            {
+                bannerPath = file;
+                break;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(outputDir, "channel.avatar_uncropped.*"))
+            {
+                avatarPath = file;
+                break;
+            }
+
+            return (bannerPath, avatarPath);
+        }
+        catch
+        {
+            return (null, null);
         }
     }
 
@@ -725,10 +931,26 @@ public partial class MainWindow : Window
                 var result = await toolRunner.RunAsync(ytDlp, args, workingDir, CancellationToken.None);
                 if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
                 {
-                    var (title, channel, durationSec) = MediaPipelineService.ParseYtDlpMetadata(result.StandardOutput);
+                    var meta = MediaPipelineService.ParseYtDlpMetadata(result.StandardOutput);
+
+                    // Download thumbnail
+                    string? thumbPath = null;
+                    if (!string.IsNullOrWhiteSpace(meta.ThumbnailUrl))
+                    {
+                        var thumbDir = Path.Combine(workingDir, "thumbnails");
+                        var thumbSlug = Path.GetFileNameWithoutExtension(item.SourcePath);
+                        thumbPath = await ThumbnailDownloader.DownloadAsync(
+                            meta.ThumbnailUrl,
+                            Path.Combine(thumbDir, $"{thumbSlug}.jpg"));
+                    }
+
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
-                        ViewModel.ApplyResolvedMetadata(item.Url, title, channel, durationSec);
+                        ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds);
+                        if (thumbPath is not null)
+                            item.ThumbnailPath = thumbPath;
+                        if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
+                            item.ChannelUrl = meta.ChannelUrl;
                     });
                 }
                 else
@@ -757,6 +979,9 @@ public partial class MainWindow : Window
                 });
             }
         }
+
+        // Also download channel banners
+        await DownloadChannelBannersAsync(workingDir);
 
         AppLog.Info($"Metadata fetch complete for {estimatingItems.Count} item(s).");
     }

@@ -52,6 +52,9 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _menuPreviewLabel = string.Empty;
     private List<MenuPage> _previewPages = new();
     private int _previewPageIndex;
+    private bool _isPreviewBusy;
+    private bool _isMetadataBusy;
+    private string _menuTitle = "Select Channel";
 
     public MainWindowViewModel()
     {
@@ -326,6 +329,24 @@ public sealed class MainWindowViewModel : ObservableObject
     public bool CanPreviewPrev => _previewPageIndex > 0;
     public bool CanPreviewNext => _previewPageIndex < _previewPages.Count - 1;
 
+    public bool IsPreviewBusy
+    {
+        get => _isPreviewBusy;
+        set => SetProperty(ref _isPreviewBusy, value);
+    }
+
+    public bool IsMetadataBusy
+    {
+        get => _isMetadataBusy;
+        set => SetProperty(ref _isMetadataBusy, value);
+    }
+
+    public string MenuTitle
+    {
+        get => _menuTitle;
+        set => SetProperty(ref _menuTitle, value);
+    }
+
     public string ProjectSummary =>
         $"{Queue.Count} videos queued, {SelectedVideoStandard}, {SelectedDiscType}, output {OutputFolder}";
 
@@ -424,6 +445,7 @@ public sealed class MainWindowViewModel : ObservableObject
         SelectedBurnDrive = string.IsNullOrWhiteSpace(project.Settings.BurnDevice)
             ? AutoBurnDriveLabel
             : project.Settings.BurnDevice;
+        MenuTitle = string.IsNullOrWhiteSpace(project.Settings.MenuTitle) ? "Select Channel" : project.Settings.MenuTitle;
         EndOfVideoGoToMenu = project.Settings.EndOfVideoAction == TitleEndBehavior.GoToMenu;
         NextChapterPlayNext = project.Settings.NextChapterAction == TitleEndBehavior.PlayNextVideo;
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -454,6 +476,9 @@ public sealed class MainWindowViewModel : ObservableObject
                         Progress = 0,
                         SourcePath = Path.Combine(OutputFolder, "downloads", $"{mediaBaseName}.mp4"),
                         TranscodedPath = transcodedPath,
+                        ThumbnailPath = video.ThumbnailPath,
+                        ChannelBannerPath = channel.BannerImagePath,
+                        ChannelAvatarPath = channel.AvatarImagePath,
                         EstimatedSizeBytes = hasTranscoded
                             ? new FileInfo(transcodedPath).Length
                             : (hasDuration ? video.EstimatedSizeBytes : 0),
@@ -490,6 +515,7 @@ public sealed class MainWindowViewModel : ObservableObject
             ImgBurnToolPath: NormalizeToolPath(ImgBurnToolPath),
             VlcToolPath: NormalizeToolPath(VlcToolPath),
             BurnDevice: NormalizeBurnDevice(SelectedBurnDrive),
+            MenuTitle: MenuTitle,
             EndOfVideoAction: EndOfVideoGoToMenu ? TitleEndBehavior.GoToMenu : TitleEndBehavior.PlayNextVideo,
             NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu);
 
@@ -502,11 +528,18 @@ public sealed class MainWindowViewModel : ObservableObject
                 },
                 StringComparer.OrdinalIgnoreCase)
             .Select(group =>
-                new ChannelProject(
+            {
+                var items = group.ToList();
+                var videos = items.Select(item => ToVideoSource(item)).ToList();
+                var bannerPath = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.ChannelBannerPath))?.ChannelBannerPath;
+                var avatarPath = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.ChannelAvatarPath))?.ChannelAvatarPath;
+                var firstThumb = videos.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v.ThumbnailPath))?.ThumbnailPath ?? string.Empty;
+                return new ChannelProject(
                     group.Key,
-                    string.Empty,
-                    string.Empty,
-                    group.Select(item => ToVideoSource(item)).ToList()))
+                    bannerPath ?? firstThumb, // banner: channel banner, fallback to first video thumbnail
+                    avatarPath ?? firstThumb, // avatar: channel avatar, fallback to first video thumbnail
+                    videos);
+            })
             .ToList();
 
         return new TubeBurnProject("TubeBurn Project", settings, channels);
@@ -982,7 +1015,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
         if (isMultiChannel)
         {
-            pages.Add(planner.BuildChannelSelectPage(project.Channels));
+            pages.Add(planner.BuildChannelSelectPage(project.Channels, project.Settings.MenuTitle));
         }
 
         for (var i = 0; i < project.Channels.Count; i++)
@@ -1305,7 +1338,7 @@ public sealed class MainWindowViewModel : ObservableObject
     }
 
     private static VideoSource ToVideoSource(QueuedVideoItem item) =>
-        new(item.Url, item.Title, string.Empty, ParseDuration(item.Duration),
+        new(item.Url, item.Title, item.ThumbnailPath, ParseDuration(item.Duration),
             item.SourcePath, item.TranscodedPath, item.EstimatedSizeBytes);
 
     private static TimeSpan ParseDuration(string duration) =>
@@ -1392,7 +1425,7 @@ public sealed class MainWindowViewModel : ObservableObject
         return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
     }
 
-    private static string Slugify(string value)
+    public static string Slugify(string value)
     {
         var invalidChars = Path.GetInvalidFileNameChars();
         var cleaned = new string(value
@@ -1528,6 +1561,10 @@ public sealed class QueuedVideoItem : ObservableObject
     private double _progress;
     private string _sourcePath = string.Empty;
     private string _transcodedPath = string.Empty;
+    private string _thumbnailPath = string.Empty;
+    private string _channelUrl = string.Empty;
+    private string _channelBannerPath = string.Empty;
+    private string _channelAvatarPath = string.Empty;
     private bool _isEstimating;
 
     public string Url { get; init; } = string.Empty;
@@ -1584,6 +1621,30 @@ public sealed class QueuedVideoItem : ObservableObject
     {
         get => _transcodedPath;
         set => SetProperty(ref _transcodedPath, value);
+    }
+
+    public string ThumbnailPath
+    {
+        get => _thumbnailPath;
+        set => SetProperty(ref _thumbnailPath, value);
+    }
+
+    public string ChannelUrl
+    {
+        get => _channelUrl;
+        set => SetProperty(ref _channelUrl, value);
+    }
+
+    public string ChannelBannerPath
+    {
+        get => _channelBannerPath;
+        set => SetProperty(ref _channelBannerPath, value);
+    }
+
+    public string ChannelAvatarPath
+    {
+        get => _channelAvatarPath;
+        set => SetProperty(ref _channelAvatarPath, value);
     }
 
     public long EstimatedSizeBytes { get; set; }

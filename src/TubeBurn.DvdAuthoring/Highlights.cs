@@ -152,20 +152,28 @@ public sealed class MenuHighlightPlanner
     /// Builds a channel-select menu page for multi-channel projects.
     /// Layout: full-width rows stacked vertically, one row per channel.
     /// </summary>
-    public MenuPage BuildChannelSelectPage(IReadOnlyList<ChannelProject> channels)
+    public MenuPage BuildChannelSelectPage(IReadOnlyList<ChannelProject> channels, string? menuTitle = null)
     {
         ArgumentNullException.ThrowIfNull(channels);
 
+        var title = string.IsNullOrWhiteSpace(menuTitle) ? "Select Channel" : menuTitle;
         var buttons = new List<MenuButton>();
+
+        // Fill available vertical space with rows — buttons expand to fill, small gap between
+        const int gap = 6;
+        var availableHeight = 400 - SafeTop; // NTSC safe bottom ~400
+        var rowHeight = (availableHeight - (channels.Count - 1) * gap) / Math.Max(channels.Count, 1);
+        rowHeight = Math.Clamp(rowHeight, ButtonHeight, 90);
+        var rowSpacing = rowHeight + gap;
 
         for (var i = 0; i < channels.Count; i++)
         {
-            var y = SafeTop + i * RowSpacing;
+            var y = SafeTop + i * rowSpacing;
             var vtsNumber = i + 1;
 
             buttons.Add(new MenuButton(
                 $"channel-{i + 1}",
-                SafeLeft, y, ButtonWidth, ButtonHeight,
+                SafeLeft, y, ButtonWidth, rowHeight,
                 channels[i].Name,
                 default!,
                 new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, vtsNumber),
@@ -175,7 +183,7 @@ public sealed class MenuHighlightPlanner
         buttons = AssignNavigation(buttons);
 
         return new MenuPage(
-            "Channel Select", 1, buttons,
+            title, 1, buttons,
             "", MenuPageType.ChannelSelect);
     }
 

@@ -198,8 +198,12 @@
                                 <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
                                     <TextBlock Grid.Column="0" Grid.Row="0" Classes="sectionTitle" Text="Source URLs" />
                                     <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                                        <Button x:Name="ImportUrlsButton" Classes="secondary" Click="OnImportUrlsClick" Content="Import File" />
-                                        <Button x:Name="AddUrlsButton" Classes="secondary" Click="OnAddUrlsClick" Content="Add to Queue" />
+                                        <TextBlock Classes="muted" Text="Fetching metadata..."
+                                                   IsVisible="{Binding IsMetadataBusy}" VerticalAlignment="Center" />
+                                        <Button x:Name="ImportUrlsButton" Classes="secondary" Click="OnImportUrlsClick" Content="Import File"
+                                                IsEnabled="{Binding !IsMetadataBusy}" />
+                                        <Button x:Name="AddUrlsButton" Classes="secondary" Click="OnAddUrlsClick" Content="Add to Queue"
+                                                IsEnabled="{Binding !IsMetadataBusy}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="0"
                                                Grid.Row="1"
@@ -232,7 +236,24 @@
                                 <ItemsControl ItemsSource="{Binding Queue}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="viewModels:QueuedVideoItem">
-                                            <Border Classes="queueItem" Margin="0,0,0,12">
+                                            <Border Classes="queueItem" Margin="0,0,0,12"
+                                                    Classes.estimating="{Binding IsEstimating}">
+                                                <Border.Styles>
+                                                    <Style Selector="Border.estimating">
+                                                        <Setter Property="Background" Value="#0D1526" />
+                                                        <Style.Animations>
+                                                            <Animation Duration="0:0:0.7" IterationCount="INFINITE"
+                                                                       PlaybackDirection="Alternate">
+                                                                <KeyFrame Cue="0%">
+                                                                    <Setter Property="Opacity" Value="0.9" />
+                                                                </KeyFrame>
+                                                                <KeyFrame Cue="100%">
+                                                                    <Setter Property="Opacity" Value="0.45" />
+                                                                </KeyFrame>
+                                                            </Animation>
+                                                        </Style.Animations>
+                                                    </Style>
+                                                </Border.Styles>
                                                 <StackPanel Spacing="10">
                                                     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
                                                         <StackPanel>
@@ -291,6 +312,10 @@
                                             <TextBox Text="{Binding OutputFolder, Mode=TwoWay}" />
                                             <Button x:Name="BrowseOutputFolderButton" Grid.Column="1" Classes="secondary" Click="OnChooseOutputFolderClick" Content="Browse" />
                                         </Grid>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="MENU TITLE" />
+                                        <TextBox Text="{Binding MenuTitle, Mode=TwoWay}" Watermark="Select Channel" />
                                     </StackPanel>
                                     <!-- PLAYBACK NAVIGATION toggles hidden — not yet functional;
                                          defaults are "show menu" for both end-of-video and next-chapter -->
@@ -435,9 +460,12 @@
 
                         <Border Classes="card">
                             <StackPanel Spacing="10">
-                                <Grid ColumnDefinitions="*,Auto">
+                                <Grid ColumnDefinitions="*,Auto,Auto">
                                     <TextBlock Classes="sectionTitle" Text="Menu Preview" />
-                                    <Button x:Name="PreviewMenuButton" Grid.Column="1" Classes="secondary" Click="OnPreviewMenuClick" Content="Refresh" />
+                                    <TextBlock Grid.Column="1" Classes="muted" Text="Downloading thumbnails..."
+                                               IsVisible="{Binding IsPreviewBusy}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <Button x:Name="PreviewMenuButton" Grid.Column="2" Classes="secondary" Click="OnPreviewMenuClick"
+                                            Content="Refresh" IsEnabled="{Binding !IsPreviewBusy}" />
                                 </Grid>
                                 <Image x:Name="MenuPreviewImage"
                                        Source="{Binding MenuPreviewImage}"

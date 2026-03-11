@@ -143,7 +143,7 @@ public static class SkiaMenuRenderer
         // Header
         using var headerFont = new SKFont(typeface, 32f);
         using var headerPaint = new SKPaint { Color = L1HeaderColor, IsAntialias = true };
-        canvas.DrawText("Select Channel", 60, 50, SKTextAlign.Left, headerFont, headerPaint);
+        canvas.DrawText(page.MenuId, 60, 50, SKTextAlign.Left, headerFont, headerPaint);
 
         // Button rows
         using var labelFont = new SKFont(typeface, 22f);
@@ -242,7 +242,7 @@ public static class SkiaMenuRenderer
                 var thumbY = button.Y + (button.Height - ThumbnailHeight) / 2f;
                 var thumbRect = new SKRect(button.X + 4, thumbY,
                     button.X + 4 + ThumbnailWidth, thumbY + ThumbnailHeight);
-                using var thumbPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+                using var thumbPaint = new SKPaint { IsAntialias = true };
                 canvas.DrawBitmap(thumbBitmap, thumbRect, thumbPaint);
                 thumbBitmap.Dispose();
                 textX = button.X + 4 + ThumbnailWidth + 10;
@@ -281,7 +281,7 @@ public static class SkiaMenuRenderer
         canvas.ClipPath(clipPath);
 
         var destRect = new SKRect(cx - radius, cy - radius, cx + radius, cy + radius);
-        using var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+        using var paint = new SKPaint { IsAntialias = true };
         canvas.DrawBitmap(image, destRect, paint);
         canvas.Restore();
 
@@ -311,24 +311,12 @@ public static class SkiaMenuRenderer
 
     private static void DrawBlurredBackground(SKCanvas canvas, SKBitmap source, int width, int height)
     {
-        // Scale source to fill, then apply blur
         var destRect = new SKRect(0, 0, width, height);
 
-        // Draw scaled image
-        using var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+        // Draw with gaussian blur filter — sigma 12 gives a soft, recognizable blur
+        using var blurFilter = SKImageFilter.CreateBlur(12f, 12f);
+        using var paint = new SKPaint { IsAntialias = true, ImageFilter = blurFilter };
         canvas.DrawBitmap(source, destRect, paint);
-
-        // Apply blur via a semi-transparent overlay + downscale trick
-        // SkiaSharp blur: draw the image at low res and scale back up for a natural blur effect
-        var blurScale = 0.08f;
-        var smallW = Math.Max(1, (int)(width * blurScale));
-        var smallH = Math.Max(1, (int)(height * blurScale));
-
-        using var smallBitmap = new SKBitmap(smallW, smallH);
-        using var smallCanvas = new SKCanvas(smallBitmap);
-        smallCanvas.DrawBitmap(source, new SKRect(0, 0, smallW, smallH), paint);
-
-        canvas.DrawBitmap(smallBitmap, destRect, paint);
     }
 
     // ── Typeface resolution ──────────────────────────────────────────
