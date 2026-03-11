@@ -62,7 +62,8 @@ public sealed class MenuHighlightPlanner
     /// Layout: full-width rows stacked vertically, one row per video.
     /// </summary>
     public List<MenuPage> BuildVideoSelectPages(
-        ChannelProject channel, int vtsNumber, int videosPerPage = 0, bool isMultiChannel = false)
+        ChannelProject channel, int vtsNumber, int videosPerPage = 0, bool isMultiChannel = false,
+        bool useChapterNavigation = false)
     {
         ArgumentNullException.ThrowIfNull(channel);
 
@@ -86,12 +87,19 @@ public sealed class MenuHighlightPlanner
                 var titleIndex = pageIndex * videosPerPage + i + 1; // 1-based title number
                 var y = SafeTop + i * RowSpacing;
 
+                // Multi-chapter mode: JumpVtsPtt(title 1, part N) — chapters within single title.
+                // Multi-title mode: JumpVtsTt(title N) — separate titles.
+                var buttonCmd = useChapterNavigation
+                    ? new DvdButtonCommand(DvdButtonCommandKind.JumpVtsPtt, titleIndex)
+                    : new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, titleIndex);
+
                 buttons.Add(new MenuButton(
                     $"video-{pageNumber}-{i + 1}",
                     SafeLeft, y, ButtonWidth, ButtonHeight,
                     video.Title,
                     default!, // navigation set below
-                    new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, titleIndex)));
+                    buttonCmd,
+                    ThumbnailPath: video.ThumbnailPath));
             }
 
             // Navigation buttons at bottom
@@ -133,7 +141,8 @@ public sealed class MenuHighlightPlanner
 
             pages.Add(new MenuPage(
                 channel.Name, pageNumber, buttons,
-                channel.BannerImagePath, MenuPageType.VideoSelect));
+                channel.BannerImagePath, MenuPageType.VideoSelect,
+                AvatarImagePath: channel.AvatarImagePath));
         }
 
         return pages;
@@ -159,7 +168,8 @@ public sealed class MenuHighlightPlanner
                 SafeLeft, y, ButtonWidth, ButtonHeight,
                 channels[i].Name,
                 default!,
-                new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, vtsNumber)));
+                new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, vtsNumber),
+                ThumbnailPath: channels[i].AvatarImagePath));
         }
 
         buttons = AssignNavigation(buttons);

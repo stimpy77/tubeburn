@@ -32,7 +32,8 @@ public static class DvdIfoWriter
         IReadOnlyList<int>? titlesPerVts = null,
         IReadOnlyList<MenuPage>? menuPages = null,
         int menuVobSectors = 0,
-        bool hasVtsmMenus = false)
+        bool hasVtsmMenus = false,
+        IReadOnlyList<int>? chaptersPerTitle = null)
     {
         var hasVmgmMenu = menuPages is not null && menuPages.Count > 0;
         var fps = standard == VideoStandard.Ntsc ? 30 : 25;
@@ -148,7 +149,9 @@ public static class DvdIfoWriter
                 var e = tt[(8 + titleGlobal * 12)..];
                 e[0] = 0x3C;                                     // title playback type
                 e[1] = 1;                                         // angles
-                Write16(e, 2, 1);                                 // chapters
+                var nrChapters = chaptersPerTitle is not null && titleGlobal < chaptersPerTitle.Count
+                    ? chaptersPerTitle[titleGlobal] : 1;
+                Write16(e, 2, (ushort)nrChapters);               // chapters per title
                 e[4] = 0xFE;                                     // region mask: region 1 (USA)
                 e[6] = (byte)(vts + 1);                          // VTS number
                 e[7] = (byte)(t + 1);                             // title within VTS
@@ -206,7 +209,8 @@ public static class DvdIfoWriter
     /// <param name="vobuSectorOffsets">VOBU sector offsets per title.</param>
     /// <param name="menuPages">Video-select menu pages for this VTS (null = no VTSM).</param>
     /// <param name="menuVobSizeBytes">Size of VTS_xx_0.VOB (menu VOB). Title VOB sectors offset by this.</param>
-    /// <param name="returnToMenu">If true, post-commands call VTSM ROOT instead of LinkPGCN/Exit.</param>
+    /// <param name="endOfVideoAction">What happens when a video finishes naturally.</param>
+    /// <param name="nextChapterAction">What >>| does. PlayNextVideo = multi-chapter topology, GoToMenu = multi-title topology.</param>
     public static byte[] WriteVtsIfo(
         VideoStandard standard,
         IReadOnlyList<long> vobFileSizes,
@@ -214,21 +218,30 @@ public static class DvdIfoWriter
         IReadOnlyList<IReadOnlyList<int>>? vobuSectorOffsets = null,
         IReadOnlyList<MenuPage>? menuPages = null,
         long menuVobSizeBytes = 0,
-        bool returnToMenu = false,
+        TitleEndBehavior endOfVideoAction = TitleEndBehavior.GoToMenu,
+        TitleEndBehavior nextChapterAction = TitleEndBehavior.PlayNextVideo,
         IReadOnlyList<int>? menuPageSectorOffsets = null)
     {
-        var titles = vobFileSizes.Count;
+        var videoCount = vobFileSizes.Count;
         var fps = standard == VideoStandard.Ntsc ? 30 : 25;
         var fpsFlag = standard == VideoStandard.Ntsc ? (byte)0xC0 : (byte)0x40;
         var hasMenu = menuPages is not null && menuPages.Count > 0;
         var menuVobSectors = CeilDiv(menuVobSizeBytes, SectorSize);
 
+        // ── Authoring topology ──────────────────────────────────────
+        // Multi-chapter: 1 title with N chapters/programs/cells (>>| = next chapter).
+        //   Activated when nextChapterAction == PlayNextVideo AND menus are present.
+        //   Cell commands handle per-video end-of-video behavior.
+        // Multi-title: N titles with 1 chapter each (>>| has no target).
+        //   Used when nextChapterAction == GoToMenu OR no menus (backward compat).
+        var multiChapter = nextChapterAction == TitleEndBehavior.PlayNextVideo && hasMenu;
+
         // Compute sector layout within concatenated title VOB data.
         // Title VOBs start AFTER menu VOB in the VTS file layout.
-        var vobStart = new long[titles];
-        var vobSectors = new long[titles];
+        var vobStart = new long[videoCount];
+        var vobSectors = new long[videoCount];
         long totalTitleVobSectors = 0;
-        for (var i = 0; i < titles; i++)
+        for (var i = 0; i < videoCount; i++)
         {
             vobStart[i] = totalTitleVobSectors;
             vobSectors[i] = CeilDiv(vobFileSizes[i], SectorSize);
@@ -236,17 +249,25 @@ public static class DvdIfoWriter
         }
 
         // ── Calculate table sizes ──────────────────────────────────
-        var pttSize = 8 + titles * 4 + titles * 4;
+        var pgcCount = multiChapter ? 1 : videoCount;
+        var cellsPerPgc = multiChapter ? videoCount : 1;
+
+        // Cell commands: each cell gets CallSS VTSM when endOfVideoAction == GoToMenu in multi-chapter mode.
+        var nCellCmds = (multiChapter && endOfVideoAction == TitleEndBehavior.GoToMenu) ? videoCount : 0;
+        var cmdTblLen = 8 + 8 + nCellCmds * 8;           // hdr(8) + 1 post(8) + cell cmds
+        var progMapLen = multiChapter ? ((videoCount + 1) & ~1) : 2;  // round to even
+        var pgcLen = 0xEC + cmdTblLen + progMapLen + cellsPerPgc * 24 + cellsPerPgc * 4;
+
+        // PTT: multi-chapter = 1 title with N parts; multi-title = N titles with 1 part each
+        var pttTitleCount = multiChapter ? 1 : videoCount;
+        var totalPttEntries = videoCount; // N chapters or N titles — same count
+        var pttSize = 8 + pttTitleCount * 4 + totalPttEntries * 4;
         var pttSectors = CeilDiv(pttSize, SectorSize);
 
-        const int cmdTblLen = 8 + 8;          // hdr + 1 post-cmd
-        const int progMapLen = 2;
-        const int pgcLen = 0xEC + cmdTblLen + progMapLen + 24 + 4;
-
-        var pgcitLen = 8 + titles * 8 + titles * pgcLen;
+        var pgcitLen = 8 + pgcCount * 8 + pgcCount * pgcLen;
         var pgcitSectors = CeilDiv(pgcitLen, SectorSize);
 
-        var cAdtLen = 8 + titles * 12;
+        var cAdtLen = 8 + videoCount * 12;
         var cAdtSectors = CeilDiv(cAdtLen, SectorSize);
 
         var totalVobuEntries = 0;
@@ -257,7 +278,7 @@ public static class DvdIfoWriter
         }
         else
         {
-            totalVobuEntries = titles;
+            totalVobuEntries = videoCount;
         }
         var vobuAdLen = 4 + totalVobuEntries * 4;
         var vobuAdSectors = CeilDiv(vobuAdLen, SectorSize);
@@ -339,104 +360,66 @@ public static class DvdIfoWriter
 
         // ── VTS_PTT_SRPT ──────────────────────────────────────────
         var ptt = buffer.AsSpan(pttSec * SectorSize);
-        Write16(ptt, 0, (ushort)titles);
-        var pttDataOff = 8 + titles * 4;
-        Write32(ptt, 4, (uint)(pttDataOff + titles * 4 - 1));
-        for (var i = 0; i < titles; i++)
+        Write16(ptt, 0, (ushort)pttTitleCount);
+        var pttDataOff = 8 + pttTitleCount * 4;
+        Write32(ptt, 4, (uint)(pttDataOff + totalPttEntries * 4 - 1));
+
+        if (multiChapter)
         {
-            Write32(ptt, 8 + i * 4, (uint)(pttDataOff + i * 4));
-            Write16(ptt, pttDataOff + i * 4, (ushort)(i + 1));
-            Write16(ptt, pttDataOff + i * 4 + 2, 1);
+            // 1 title with N chapters: all point to PGC 1, programs 1..N
+            Write32(ptt, 8, (uint)pttDataOff);
+            for (var c = 0; c < videoCount; c++)
+            {
+                Write16(ptt, pttDataOff + c * 4, 1);                   // PGC 1
+                Write16(ptt, pttDataOff + c * 4 + 2, (ushort)(c + 1)); // program c+1
+            }
+        }
+        else
+        {
+            // N titles with 1 chapter each
+            var pttEntryOff = pttDataOff;
+            for (var t = 0; t < videoCount; t++)
+            {
+                Write32(ptt, 8 + t * 4, (uint)pttEntryOff);
+                Write16(ptt, pttEntryOff, (ushort)(t + 1));     // PGC t+1
+                Write16(ptt, pttEntryOff + 2, 1);               // program 1
+                pttEntryOff += 4;
+            }
         }
 
         // ── VTS_PGCIT ─────────────────────────────────────────────
         var pgcit = buffer.AsSpan(pgcitSec * SectorSize);
-        Write16(pgcit, 0, (ushort)titles);
+        Write16(pgcit, 0, (ushort)pgcCount);
         Write32(pgcit, 4, (uint)(pgcitLen - 1));
 
-        var pgcDataOffset = 8 + titles * 8;
-        for (var i = 0; i < titles; i++)
+        var pgcDataOffset = 8 + pgcCount * 8;
+        for (var i = 0; i < pgcCount; i++)
         {
             var srp = pgcit.Slice(8 + i * 8, 8);
             srp[0] = (byte)(0x81 + i);
             Write32(srp, 4, (uint)(pgcDataOffset + i * pgcLen));
         }
 
-        for (var i = 0; i < titles; i++)
+        if (multiChapter)
         {
-            var pgc = pgcit.Slice(pgcDataOffset + i * pgcLen, pgcLen);
-
-            pgc[0x02] = 1;
-            pgc[0x03] = 1;
-
-            var durationSeconds = vobDurationsPts is not null && i < vobDurationsPts.Count
-                ? (int)(vobDurationsPts[i] / 90000)
-                : EstimateDurationSeconds(vobFileSizes[i]);
-            WriteBcdTime(pgc[0x04..], durationSeconds, fps, fpsFlag);
-
-            Write16(pgc, 0x0C, 0x8000);
-
-            Write16(pgc, 0x9C, i < titles - 1 ? (ushort)(i + 2) : (ushort)0);
-            Write16(pgc, 0x9E, i > 0 ? (ushort)i : (ushort)0);
-
-            var cmdOff = 0xEC;
-            var mapOff = cmdOff + cmdTblLen;
-            var cpbOff = mapOff + progMapLen;
-            var cpsOff = cpbOff + 24;
-
-            Write16(pgc, 0xE4, (ushort)cmdOff);
-            Write16(pgc, 0xE6, (ushort)mapOff);
-            Write16(pgc, 0xE8, (ushort)cpbOff);
-            Write16(pgc, 0xEA, (ushort)cpsOff);
-
-            // Post-command
-            Write16(pgc, cmdOff + 2, 1);
-            Write16(pgc, cmdOff + 6, 7 + 8);
-
-            if (returnToMenu)
-            {
-                // CallSS VTSM root menu, rsm_cell=1
-                // Reference: dvdcompile.c:1129 — 0x80 | 3 = 0x83
-                pgc[cmdOff + 8] = 0x30;
-                pgc[cmdOff + 9] = 0x08;
-                pgc[cmdOff + 12] = 0x01; // rsm_cell = 1
-                pgc[cmdOff + 13] = 0x83; // VTSM root = 0x80 | 3
-            }
-            else if (i < titles - 1)
-            {
-                // LinkPGCN next
-                pgc[cmdOff + 8] = 0x20;
-                pgc[cmdOff + 9] = 0x04;
-                pgc[cmdOff + 15] = (byte)(i + 2);
-            }
-            else
-            {
-                // Exit
-                pgc[cmdOff + 8] = 0x30;
-                pgc[cmdOff + 9] = 0x01;
-            }
-
-            pgc[mapOff] = 1;
-
-            var c = pgc.Slice(cpbOff, 24);
-            WriteBcdTime(c[4..], durationSeconds, fps, fpsFlag);
-            Write32(c, 8, (uint)vobStart[i]);
-            var lastVobuStart = vobuSectorOffsets is not null && i < vobuSectorOffsets.Count && vobuSectorOffsets[i].Count > 0
-                ? (uint)vobuSectorOffsets[i][^1]
-                : (uint)vobStart[i];
-            Write32(c, 16, lastVobuStart);
-            Write32(c, 20, (uint)(vobStart[i] + vobSectors[i] - 1));
-
-            var p = pgc.Slice(cpsOff, 4);
-            Write16(p, 0, (ushort)(i + 1));
-            p[3] = 1;
+            WriteMultiChapterPgc(pgcit.Slice(pgcDataOffset, pgcLen),
+                videoCount, vobFileSizes, vobDurationsPts, vobStart, vobSectors,
+                vobuSectorOffsets, endOfVideoAction, fps, fpsFlag,
+                cmdTblLen, progMapLen, nCellCmds);
+        }
+        else
+        {
+            WriteMultiTitlePgcs(pgcit, pgcDataOffset, pgcLen,
+                videoCount, vobFileSizes, vobDurationsPts, vobStart, vobSectors,
+                vobuSectorOffsets, endOfVideoAction, nextChapterAction, menuPages,
+                fps, fpsFlag, cmdTblLen, progMapLen);
         }
 
         // ── VTS_C_ADT ─────────────────────────────────────────────
         var cAdt = buffer.AsSpan(cAdtSec * SectorSize);
-        Write16(cAdt, 0, (ushort)titles);
-        Write32(cAdt, 4, (uint)(8 + titles * 12 - 1));
-        for (var i = 0; i < titles; i++)
+        Write16(cAdt, 0, (ushort)videoCount);
+        Write32(cAdt, 4, (uint)(8 + videoCount * 12 - 1));
+        for (var i = 0; i < videoCount; i++)
         {
             var e = cAdt.Slice(8 + i * 12, 12);
             Write16(e, 0, (ushort)(i + 1));
@@ -459,11 +442,196 @@ public static class DvdIfoWriter
         }
         else
         {
-            for (var i = 0; i < titles; i++)
+            for (var i = 0; i < videoCount; i++)
                 Write32(vad, 4 + vadIdx++ * 4, (uint)vobStart[i]);
         }
 
         return buffer;
+    }
+
+    /// <summary>
+    /// Writes a single PGC with N programs/cells (multi-chapter topology).
+    /// >>| advances between chapters. Cell commands handle end-of-video behavior.
+    /// </summary>
+    private static void WriteMultiChapterPgc(
+        Span<byte> pgc, int videoCount,
+        IReadOnlyList<long> vobFileSizes, IReadOnlyList<long>? vobDurationsPts,
+        long[] vobStart, long[] vobSectors,
+        IReadOnlyList<IReadOnlyList<int>>? vobuSectorOffsets,
+        TitleEndBehavior endOfVideoAction,
+        int fps, byte fpsFlag,
+        int cmdTblLen, int progMapLen, int nCellCmds)
+    {
+        pgc[0x02] = (byte)videoCount;                           // nr_of_programs = N
+        pgc[0x03] = (byte)videoCount;                           // nr_of_cells = N
+
+        // PGC duration = sum of all video durations
+        var totalDurationSeconds = 0;
+        for (var i = 0; i < videoCount; i++)
+        {
+            totalDurationSeconds += vobDurationsPts is not null && i < vobDurationsPts.Count
+                ? (int)(vobDurationsPts[i] / 90000)
+                : EstimateDurationSeconds(vobFileSizes[i]);
+        }
+        WriteBcdTime(pgc[0x04..], totalDurationSeconds, fps, fpsFlag);
+
+        Write16(pgc, 0x0C, 0x8000);                            // prohibited UOP
+
+        // No next/prev PGC (single PGC in multi-chapter mode)
+
+        var cmdOff = 0xEC;
+        var mapOff = cmdOff + cmdTblLen;
+        var cpbOff = mapOff + progMapLen;
+        var cpsOff = cpbOff + videoCount * 24;
+
+        Write16(pgc, 0xE4, (ushort)cmdOff);
+        Write16(pgc, 0xE6, (ushort)mapOff);
+        Write16(pgc, 0xE8, (ushort)cpbOff);
+        Write16(pgc, 0xEA, (ushort)cpsOff);
+
+        // Command table header
+        Write16(pgc, cmdOff + 2, 1);                            // nr_of_post = 1
+        if (nCellCmds > 0)
+            Write16(pgc, cmdOff + 4, (ushort)nCellCmds);       // nr_of_cell
+        Write16(pgc, cmdOff + 6, (ushort)(cmdTblLen - 1));     // end_address
+
+        // Post-command: CallSS VTSM root (after last cell, or as safety net)
+        var postOff = cmdOff + 8;
+        pgc[postOff] = 0x30;
+        pgc[postOff + 1] = 0x08;
+        pgc[postOff + 4] = 0x01;                               // rsm_cell = 1
+        pgc[postOff + 5] = 0x83;                               // VTSM root
+
+        // Cell commands: CallSS VTSM for each cell (end-of-video → menu)
+        for (var c = 0; c < nCellCmds; c++)
+        {
+            var cellCmdOff = postOff + 8 + c * 8;
+            pgc[cellCmdOff] = 0x30;
+            pgc[cellCmdOff + 1] = 0x08;
+            pgc[cellCmdOff + 4] = (byte)(c + 1);               // rsm_cell
+            pgc[cellCmdOff + 5] = 0x83;                        // VTSM root
+        }
+
+        // Program map: N entries [1, 2, 3, ..., N]
+        for (var c = 0; c < videoCount; c++)
+            pgc[mapOff + c] = (byte)(c + 1);
+
+        // Cell playback: N entries (24 bytes each)
+        for (var c = 0; c < videoCount; c++)
+        {
+            var cell = pgc.Slice(cpbOff + c * 24, 24);
+            if (nCellCmds > 0)
+                cell[3] = (byte)(c + 1); // cell_cmd_nr (1-based)
+
+            var dur = vobDurationsPts is not null && c < vobDurationsPts.Count
+                ? (int)(vobDurationsPts[c] / 90000)
+                : EstimateDurationSeconds(vobFileSizes[c]);
+            WriteBcdTime(cell[4..], dur, fps, fpsFlag);
+            Write32(cell, 8, (uint)vobStart[c]);
+            var lastVobuStart = vobuSectorOffsets is not null && c < vobuSectorOffsets.Count && vobuSectorOffsets[c].Count > 0
+                ? (uint)vobuSectorOffsets[c][^1]
+                : (uint)vobStart[c];
+            Write32(cell, 16, lastVobuStart);
+            Write32(cell, 20, (uint)(vobStart[c] + vobSectors[c] - 1));
+        }
+
+        // Cell position: N entries (4 bytes each)
+        for (var c = 0; c < videoCount; c++)
+        {
+            var pos = pgc.Slice(cpsOff + c * 4, 4);
+            Write16(pos, 0, (ushort)(c + 1));                  // vob_id
+            pos[3] = 1;                                         // cell_id = 1
+        }
+    }
+
+    /// <summary>
+    /// Writes N separate PGCs with 1 program/cell each (multi-title topology).
+    /// Each PGC is its own title; >>| has no next chapter.
+    /// </summary>
+    private static void WriteMultiTitlePgcs(
+        Span<byte> pgcit, int pgcDataOffset, int pgcLen,
+        int videoCount,
+        IReadOnlyList<long> vobFileSizes, IReadOnlyList<long>? vobDurationsPts,
+        long[] vobStart, long[] vobSectors,
+        IReadOnlyList<IReadOnlyList<int>>? vobuSectorOffsets,
+        TitleEndBehavior endOfVideoAction, TitleEndBehavior nextChapterAction,
+        IReadOnlyList<MenuPage>? menuPages,
+        int fps, byte fpsFlag,
+        int cmdTblLen, int progMapLen)
+    {
+        for (var i = 0; i < videoCount; i++)
+        {
+            var pgc = pgcit.Slice(pgcDataOffset + i * pgcLen, pgcLen);
+
+            pgc[0x02] = 1;                                     // nr_of_programs = 1
+            pgc[0x03] = 1;                                     // nr_of_cells = 1
+
+            var durationSeconds = vobDurationsPts is not null && i < vobDurationsPts.Count
+                ? (int)(vobDurationsPts[i] / 90000)
+                : EstimateDurationSeconds(vobFileSizes[i]);
+            WriteBcdTime(pgc[0x04..], durationSeconds, fps, fpsFlag);
+
+            Write16(pgc, 0x0C, 0x8000);
+
+            // next/prev PGC links
+            if (nextChapterAction == TitleEndBehavior.PlayNextVideo)
+            {
+                // This branch only fires when no menus (backward compat auto-play)
+                Write16(pgc, 0x9C, i < videoCount - 1 ? (ushort)(i + 2) : (ushort)0);
+                Write16(pgc, 0x9E, i > 0 ? (ushort)i : (ushort)0);
+            }
+
+            var cmdOff = 0xEC;
+            var mapOff = cmdOff + cmdTblLen;
+            var cpbOff = mapOff + progMapLen;
+            var cpsOff = cpbOff + 24;
+
+            Write16(pgc, 0xE4, (ushort)cmdOff);
+            Write16(pgc, 0xE6, (ushort)mapOff);
+            Write16(pgc, 0xE8, (ushort)cpbOff);
+            Write16(pgc, 0xEA, (ushort)cpsOff);
+
+            // Post-command
+            Write16(pgc, cmdOff + 2, 1);                       // nr_of_post = 1
+            Write16(pgc, cmdOff + 6, (ushort)(cmdTblLen - 1)); // end_address
+
+            if (i < videoCount - 1 && (endOfVideoAction == TitleEndBehavior.PlayNextVideo || menuPages is null))
+            {
+                // LinkPGCN next — chain to next title on end-of-playback.
+                pgc[cmdOff + 8] = 0x20;
+                pgc[cmdOff + 9] = 0x04;
+                pgc[cmdOff + 15] = (byte)(i + 2);
+            }
+            else if (menuPages is not null)
+            {
+                // Return to VTSM root menu on end-of-playback
+                pgc[cmdOff + 8] = 0x30;
+                pgc[cmdOff + 9] = 0x08;
+                pgc[cmdOff + 12] = 0x01;
+                pgc[cmdOff + 13] = 0x83;
+            }
+            else
+            {
+                // No menus, last title: exit
+                pgc[cmdOff + 8] = 0x30;
+                pgc[cmdOff + 9] = 0x01;
+            }
+
+            pgc[mapOff] = 1;
+
+            var c = pgc.Slice(cpbOff, 24);
+            WriteBcdTime(c[4..], durationSeconds, fps, fpsFlag);
+            Write32(c, 8, (uint)vobStart[i]);
+            var lastVobuStart = vobuSectorOffsets is not null && i < vobuSectorOffsets.Count && vobuSectorOffsets[i].Count > 0
+                ? (uint)vobuSectorOffsets[i][^1]
+                : (uint)vobStart[i];
+            Write32(c, 16, lastVobuStart);
+            Write32(c, 20, (uint)(vobStart[i] + vobSectors[i] - 1));
+
+            var p = pgc.Slice(cpsOff, 4);
+            Write16(p, 0, (ushort)(i + 1));
+            p[3] = 1;
+        }
     }
 
     /// <summary>
@@ -627,10 +795,11 @@ public static class DvdIfoWriter
 
     private static void WriteVideoAttr(Span<byte> dest, VideoStandard standard)
     {
+        // bits[15:14]=01 (MPEG-2), bits[13:12]=standard, bits[9:8]=00 (16:9 aspect ratio)
         ushort v = 0x4000;
         if (standard == VideoStandard.Pal)
             v |= 0x1000;
-        v |= 0x0300;
+        // 0x0000 for bits[9:8] = 16:9; was 0x0300 = 4:3
         Write16(dest, 0, v);
     }
 

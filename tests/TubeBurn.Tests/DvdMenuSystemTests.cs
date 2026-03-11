@@ -246,7 +246,7 @@ public sealed class DvdMenuSystemTests
     }
 
     [Fact]
-    public void MenuPlanner_video_buttons_have_JumpVtsTt_commands()
+    public void MenuPlanner_video_buttons_have_JumpVtsTt_commands_in_title_mode()
     {
         var channel = new ChannelProject("Test", "", "", [
             MakeVideo("Video 1"),
@@ -254,6 +254,7 @@ public sealed class DvdMenuSystemTests
         ]);
 
         var planner = new MenuHighlightPlanner();
+        // useChapterNavigation=false (default) → JumpVtsTt
         var pages = planner.BuildVideoSelectPages(channel, 1);
 
         var videoButtons = pages[0].Buttons
@@ -315,7 +316,7 @@ public sealed class DvdMenuSystemTests
             [170_000L],
             menuPages: menuPages,
             menuVobSizeBytes: 2048 * 10,
-            returnToMenu: true);
+            endOfVideoAction: TitleEndBehavior.GoToMenu);
 
         // VTSM_PGCI_UT offset at VTS MAT 0xD0 should be non-zero
         var vtsmPgciUtSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xD0));
@@ -339,7 +340,7 @@ public sealed class DvdMenuSystemTests
             [170_000L],
             menuPages: menuPages,
             menuVobSizeBytes: 2048 * 10,
-            returnToMenu: true);
+            endOfVideoAction: TitleEndBehavior.GoToMenu);
 
         // Find VTSM_PGCI_UT and check still_time
         var vtsmPgciUtSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xD0));
@@ -373,7 +374,7 @@ public sealed class DvdMenuSystemTests
             [170_000L],
             menuPages: menuPages,
             menuVobSizeBytes: 2048 * 10,
-            returnToMenu: true);
+            endOfVideoAction: TitleEndBehavior.GoToMenu);
 
         var vobsStartWithout = BinaryPrimitives.ReadUInt32BigEndian(ifoWithoutMenu.AsSpan(0xC4));
         var vobsStartWith = BinaryPrimitives.ReadUInt32BigEndian(ifoWithMenu.AsSpan(0xC4));
@@ -386,10 +387,17 @@ public sealed class DvdMenuSystemTests
     [Fact]
     public void IfoWriter_post_command_returns_to_menu_when_flag_set()
     {
+        var menuPages = new List<MenuPage>
+        {
+            new("Test", 1, [MakeButton(80, 80, 240, 120)], "", MenuPageType.VideoSelect),
+        };
+
         var ifo = DvdIfoWriter.WriteVtsIfo(
             VideoStandard.Ntsc,
             [170_000L],
-            returnToMenu: true);
+            menuPages: menuPages,
+            menuVobSizeBytes: 2048 * 10,
+            endOfVideoAction: TitleEndBehavior.GoToMenu);
 
         var pgcitSector = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xCC));
         var pgcitBase = (int)pgcitSector * 2048;
@@ -506,6 +514,310 @@ public sealed class DvdMenuSystemTests
 
         Assert.Single(layouts);
         Assert.Equal(2, layouts[0].Buttons.Count);
+    }
+
+    // ── SkiaSharp Menu Rendering ────────────────────────────────────
+
+    [Fact]
+    public void SkiaMenuRenderer_renders_channel_select_preview_png()
+    {
+        var page = new MenuPage(
+            "Channel Select", 1,
+            [
+                new MenuButton("ch-1", 20, 70, 680, 46, "Psalms Remixed",
+                    new ButtonNavigation(1, 2, 1, 1), new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, 1)),
+                new MenuButton("ch-2", 20, 122, 680, 46, "Michael Or",
+                    new ButtonNavigation(1, 3, 2, 2), new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, 2)),
+                new MenuButton("ch-3", 20, 174, 680, 46, "Hope and Frame",
+                    new ButtonNavigation(2, 3, 3, 3), new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, 3)),
+            ],
+            "", MenuPageType.ChannelSelect);
+
+        var png = TubeBurn.Infrastructure.SkiaMenuRenderer.RenderPreview(page, VideoStandard.Ntsc);
+        Assert.NotEmpty(png);
+
+        // Save to screenshots for visual inspection
+        var screenshotDir = Path.Combine(AppContext.BaseDirectory, "screenshots");
+        Directory.CreateDirectory(screenshotDir);
+        File.WriteAllBytes(Path.Combine(screenshotDir, "skia-channel-select-preview.png"), png);
+    }
+
+    [Fact]
+    public void SkiaMenuRenderer_renders_video_select_preview_png()
+    {
+        var page = new MenuPage(
+            "Psalms Remixed", 1,
+            [
+                new MenuButton("v-1", 20, 70, 680, 46, "Psalm 23 - The Lord is My Shepherd, A Beautiful and Timeless Passage of Scripture (Remix)",
+                    new ButtonNavigation(1, 2, 1, 1), new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, 1)),
+                new MenuButton("v-2", 20, 122, 680, 46, "Psalm 91 - He Who Dwells in the Shelter of the Most High Will Rest in the Shadow of the Almighty (Remix)",
+                    new ButtonNavigation(1, 3, 2, 2), new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, 2)),
+                new MenuButton("v-3", 20, 174, 680, 46, "Psalm 121 - I Lift My Eyes (Remix)",
+                    new ButtonNavigation(2, 4, 3, 3), new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, 3)),
+                new MenuButton("v-4", 20, 226, 680, 46, "Short (Remix)",
+                    new ButtonNavigation(3, 4, 4, 4), new DvdButtonCommand(DvdButtonCommandKind.JumpVtsTt, 4)),
+            ],
+            "", MenuPageType.VideoSelect);
+
+        var png = TubeBurn.Infrastructure.SkiaMenuRenderer.RenderPreview(page, VideoStandard.Ntsc);
+        Assert.NotEmpty(png);
+
+        var screenshotDir = Path.Combine(AppContext.BaseDirectory, "screenshots");
+        Directory.CreateDirectory(screenshotDir);
+        File.WriteAllBytes(Path.Combine(screenshotDir, "skia-video-select-preview.png"), png);
+    }
+
+    // ── Simple PTT structure + post-command verification ─────────────
+
+    [Fact]
+    public void IfoWriter_4video_ptt_one_chapter_per_title()
+    {
+        var menuPages = new List<MenuPage>
+        {
+            new("Test", 1, [
+                MakeButton(20, 70, 680, 46),
+                MakeButton(20, 122, 680, 46),
+                MakeButton(20, 174, 680, 46),
+                MakeButton(20, 226, 680, 46),
+            ], "", MenuPageType.VideoSelect),
+        };
+
+        var ifo = DvdIfoWriter.WriteVtsIfo(
+            VideoStandard.Ntsc,
+            [170_000L, 170_000L, 170_000L, 170_000L],
+            menuPages: menuPages,
+            menuVobSizeBytes: 2048 * 10,
+            endOfVideoAction: TitleEndBehavior.GoToMenu,
+            nextChapterAction: TitleEndBehavior.GoToMenu);
+
+        // VTS_PTT_SRPT: 4 titles, each with 1 chapter (nextChapterAction=GoToMenu)
+        var pttSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xC8));
+        var pttBase = (int)pttSec * 2048;
+        var nrSrpts = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase));
+        Assert.Equal(4, nrSrpts);
+
+        // Each title has 1 chapter pointing to its own PGC
+        for (var t = 0; t < 4; t++)
+        {
+            var tOff = (int)BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(pttBase + 8 + t * 4));
+            var pgcn = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase + tOff));
+            Assert.Equal(t + 1, pgcn); // title t+1 → PGC t+1
+        }
+
+        // VTS_PGCIT: 4 PGCs, each is entry PGC for its title
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcitBase));
+        Assert.Equal(4, pgcCount);
+
+        Assert.Equal(0x81, ifo[pgcitBase + 8]);      // PGC 1 = entry for title 1
+        Assert.Equal(0x82, ifo[pgcitBase + 8 + 8]);  // PGC 2 = entry for title 2
+
+        // Post-commands: ALL return to menu (CallSS VTSM)
+        for (var t = 0; t < pgcCount; t++)
+        {
+            var srpOff = pgcitBase + 8 + t * 8;
+            var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(srpOff + 4));
+            var pgcAbs = pgcitBase + (int)pgcOff;
+
+            var cmdOff = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + 0xE4));
+            var nrPre = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + cmdOff));
+            var postCmdAbs = pgcAbs + cmdOff + 8 + nrPre * 8;
+
+            Assert.Equal(0x30, ifo[postCmdAbs]);     // CallSS VTSM
+            Assert.Equal(0x08, ifo[postCmdAbs + 1]);
+        }
+    }
+
+    [Fact]
+    public void IfoWriter_menu_go_to_menu_next_play_next_uses_multi_chapter_topology()
+    {
+        // Regression test for the exact user-requested combo:
+        // endOfVideoAction=GoToMenu + nextChapterAction=PlayNextVideo + menus present.
+        // This should produce multi-chapter topology: 1 PGC with 3 programs/cells.
+        // >>| advances between chapters; cell commands handle end-of-video → menu.
+        var menuPages = new List<MenuPage>
+        {
+            new("Test", 1, [
+                MakeButton(20, 70, 680, 46),
+                MakeButton(20, 122, 680, 46),
+                MakeButton(20, 174, 680, 46),
+            ], "", MenuPageType.VideoSelect),
+        };
+
+        var ifo = DvdIfoWriter.WriteVtsIfo(
+            VideoStandard.Ntsc,
+            [170_000L, 170_000L, 170_000L],
+            menuPages: menuPages,
+            menuVobSizeBytes: 2048 * 10,
+            endOfVideoAction: TitleEndBehavior.GoToMenu,
+            nextChapterAction: TitleEndBehavior.PlayNextVideo);
+
+        // PTT: 1 title with 3 chapters (multi-chapter mode)
+        var pttSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xC8));
+        var pttBase = (int)pttSec * 2048;
+        Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase))); // 1 title
+
+        // All 3 chapters point to PGC 1 with programs 1, 2, 3
+        var titleOff = (int)BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(pttBase + 8));
+        for (var c = 0; c < 3; c++)
+        {
+            var pgcn = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase + titleOff + c * 4));
+            var progn = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase + titleOff + c * 4 + 2));
+            Assert.Equal(1, pgcn);       // all chapters in PGC 1
+            Assert.Equal(c + 1, progn);  // program 1, 2, 3
+        }
+
+        // PGCIT: 1 PGC with 3 programs and 3 cells
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcitBase))); // 1 PGC
+
+        var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(pgcitBase + 8 + 4));
+        var pgcAbs = pgcitBase + (int)pgcOff;
+
+        Assert.Equal(3, ifo[pgcAbs + 0x02]); // nr_of_programs = 3
+        Assert.Equal(3, ifo[pgcAbs + 0x03]); // nr_of_cells = 3
+
+        // Command table: 1 post-command + 3 cell commands
+        var cmdOff = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + 0xE4));
+        var nrPost = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + cmdOff + 2));
+        var nrCell = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + cmdOff + 4));
+        Assert.Equal(1, nrPost);
+        Assert.Equal(3, nrCell); // 3 cell commands (GoToMenu for each cell)
+
+        // Post-command: CallSS VTSM root
+        var postCmdAbs = pgcAbs + cmdOff + 8;
+        Assert.Equal(0x30, ifo[postCmdAbs]);
+        Assert.Equal(0x08, ifo[postCmdAbs + 1]);
+        Assert.Equal(0x83, ifo[postCmdAbs + 5]);
+
+        // Cell commands: each CallSS VTSM root (end-of-video → menu)
+        for (var c = 0; c < 3; c++)
+        {
+            var cellCmdAbs = postCmdAbs + 8 + c * 8;
+            Assert.Equal(0x30, ifo[cellCmdAbs]);
+            Assert.Equal(0x08, ifo[cellCmdAbs + 1]);
+            Assert.Equal(0x83, ifo[cellCmdAbs + 5]);
+        }
+
+        // Cell playback entries must reference corresponding cell_cmd_nr values (1..N)
+        var cpbOff = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + 0xE8));
+        for (var c = 0; c < 3; c++)
+        {
+            var cellAbs = pgcAbs + cpbOff + c * 24;
+            Assert.Equal(c + 1, ifo[cellAbs + 3]);
+        }
+    }
+
+    [Fact]
+    public void IfoWriter_multi_chapter_play_next_has_no_cell_commands()
+    {
+        // endOfVideoAction=PlayNextVideo + nextChapterAction=PlayNextVideo + menus:
+        // Multi-chapter topology with NO cell commands (cells flow naturally).
+        var menuPages = new List<MenuPage>
+        {
+            new("Test", 1, [
+                MakeButton(20, 70, 680, 46),
+                MakeButton(20, 122, 680, 46),
+            ], "", MenuPageType.VideoSelect),
+        };
+
+        var ifo = DvdIfoWriter.WriteVtsIfo(
+            VideoStandard.Ntsc,
+            [170_000L, 170_000L],
+            menuPages: menuPages,
+            menuVobSizeBytes: 2048 * 10,
+            endOfVideoAction: TitleEndBehavior.PlayNextVideo,
+            nextChapterAction: TitleEndBehavior.PlayNextVideo);
+
+        // 1 PGC with 2 programs/cells (multi-chapter)
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcitBase)));
+
+        var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(pgcitBase + 8 + 4));
+        var pgcAbs = pgcitBase + (int)pgcOff;
+
+        Assert.Equal(2, ifo[pgcAbs + 0x02]); // nr_of_programs
+        Assert.Equal(2, ifo[pgcAbs + 0x03]); // nr_of_cells
+
+        // Command table: 1 post-command, 0 cell commands
+        var cmdOff = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + 0xE4));
+        var nrCell = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + cmdOff + 4));
+        Assert.Equal(0, nrCell); // no cell commands = videos play through naturally
+
+        // No cell commands in this mode => cell_cmd_nr must be zero for all cells
+        var cpbOff = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcAbs + 0xE8));
+        for (var c = 0; c < 2; c++)
+        {
+            var cellAbs = pgcAbs + cpbOff + c * 24;
+            Assert.Equal(0, ifo[cellAbs + 3]);
+        }
+    }
+
+    [Fact]
+    public void IfoWriter_multi_title_when_next_chapter_go_to_menu()
+    {
+        // nextChapterAction=GoToMenu should use multi-title topology even with menus.
+        var menuPages = new List<MenuPage>
+        {
+            new("Test", 1, [
+                MakeButton(20, 70, 680, 46),
+                MakeButton(20, 122, 680, 46),
+                MakeButton(20, 174, 680, 46),
+            ], "", MenuPageType.VideoSelect),
+        };
+
+        var ifo = DvdIfoWriter.WriteVtsIfo(
+            VideoStandard.Ntsc,
+            [170_000L, 170_000L, 170_000L],
+            menuPages: menuPages,
+            menuVobSizeBytes: 2048 * 10,
+            endOfVideoAction: TitleEndBehavior.GoToMenu,
+            nextChapterAction: TitleEndBehavior.GoToMenu);
+
+        // Should have 3 PGCs (multi-title)
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        Assert.Equal(3, BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcitBase)));
+
+        // PTT: 3 titles
+        var pttSec = BinaryPrimitives.ReadUInt32BigEndian(ifo.AsSpan(0xC8));
+        var pttBase = (int)pttSec * 2048;
+        Assert.Equal(3, BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pttBase)));
+    }
+
+    [Fact]
+    public void MenuPlanner_video_buttons_use_JumpVtsPtt_in_chapter_mode()
+    {
+        var channel = new ChannelProject("Test", "", "", [
+            MakeVideo("Video 1"),
+            MakeVideo("Video 2"),
+        ]);
+
+        var planner = new MenuHighlightPlanner();
+        var pages = planner.BuildVideoSelectPages(channel, 1, useChapterNavigation: true);
+
+        var videoButtons = pages[0].Buttons
+            .Where(b => b.ActivateCommand.Kind == DvdButtonCommandKind.JumpVtsPtt)
+            .ToList();
+
+        Assert.Equal(2, videoButtons.Count);
+        Assert.Equal(1, videoButtons[0].ActivateCommand.Target); // chapter 1
+        Assert.Equal(2, videoButtons[1].ActivateCommand.Target); // chapter 2
+    }
+
+    [Fact]
+    public void JumpVtsPttCommand_encodes_correctly()
+    {
+        var bytes = _codec.Encode(new JumpVtsPttCommand(1, 3));
+        Assert.Equal(8, bytes.Length);
+        Assert.Equal(0x30, bytes[0]);
+        Assert.Equal(0x04, bytes[1]);
+        Assert.Equal(0x00, bytes[2]); // ptt high bits
+        Assert.Equal(0x03, bytes[3]); // ptt = 3
+        Assert.Equal(0x01, bytes[5]); // title = 1
     }
 
     // ── Helpers ───────────────────────────────────────────────────

@@ -21,7 +21,7 @@ public sealed class AuthoringBackendSelector
         if (ffmpegResolution.IsAvailable && ffmpegResolution.ResolvedPath is { } ffmpegPath)
         {
             pipeline.MenuRenderer = (outputDir, page, standard, ct) =>
-                MenuBackgroundRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
+                SkiaMenuRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
         }
 
         return pipeline;

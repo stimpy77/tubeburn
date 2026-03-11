@@ -24,6 +24,8 @@ public sealed record JumpSsVtsmCommand(byte Vts) : DvdCommand;
 
 public sealed record JumpVtsTtCommand(byte Title) : DvdCommand;
 
+public sealed record JumpVtsPttCommand(byte Title, ushort Part) : DvdCommand;
+
 public sealed record ExitCommand() : DvdCommand;
 
 public sealed record SetHighlightButtonCommand(ushort ButtonNumber) : DvdCommand;
@@ -113,6 +115,16 @@ public sealed class DvdCommandCodec
                 buffer[0] = 0x30;
                 buffer[1] = 0x03;
                 buffer[5] = jumpVtsTt.Title;
+                break;
+
+            case JumpVtsPttCommand jumpVtsPtt:
+                // JumpVTS_PTT: bits 51-48 = 4, title at vm_getbits(22,7) = byte[5] & 0x7F,
+                // part at vm_getbits(41,10) = byte[2] bits[1:0] + byte[3]
+                buffer[0] = 0x30;
+                buffer[1] = 0x04;
+                buffer[2] = (byte)((jumpVtsPtt.Part >> 8) & 0x03);
+                buffer[3] = (byte)(jumpVtsPtt.Part & 0xFF);
+                buffer[5] = jumpVtsPtt.Title;
                 break;
 
             case ExitCommand:

@@ -141,7 +141,10 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
 
         var allVtsIfos = new List<byte[]>();
         var titlesPerVts = new List<int>();
-        var totalTitleCount = 0;
+        var chaptersPerTitle = new List<int>();
+        // TEMP: keep menu navigation on multi-title topology for player reliability.
+        // Chapter-mode menu jumps (JumpVtsPtt) are currently not activating reliably in VLC.
+        var useChapters = false;
 
         // Process each channel as a separate VTS
         for (var ch = 0; ch < project.Channels.Count; ch++)
@@ -151,7 +154,9 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             var vtsTag = $"VTS_{vtsNumber:D2}";
 
             // Build video-select menu pages
-            var videoMenuPages = _highlightPlanner.BuildVideoSelectPages(channel, vtsNumber, isMultiChannel: isMultiChannel);
+            var videoMenuPages = _highlightPlanner.BuildVideoSelectPages(
+                channel, vtsNumber, isMultiChannel: isMultiChannel,
+                useChapterNavigation: useChapters);
 
             // Render menu backgrounds & build menu VOB for all pages
             long menuVobSize = 0;
@@ -211,15 +216,28 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets,
                 menuPages: videoMenuPages.Count > 0 ? videoMenuPages : null,
                 menuVobSizeBytes: menuVobSize,
-                returnToMenu: true,
+                endOfVideoAction: project.Settings.EndOfVideoAction,
+                nextChapterAction: useChapters ? project.Settings.NextChapterAction : TitleEndBehavior.GoToMenu,
                 menuPageSectorOffsets: menuPageSectorOffsets.Count > 0 ? menuPageSectorOffsets : null);
 
             await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.IFO"), vtsIfo, cancellationToken);
             await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, $"{vtsTag}_0.BUP"), vtsIfo, cancellationToken);
 
             allVtsIfos.Add(vtsIfo);
-            titlesPerVts.Add(channel.Videos.Count);
-            totalTitleCount += channel.Videos.Count;
+
+            if (useChapters)
+            {
+                // Multi-chapter: 1 title per VTS with N chapters
+                titlesPerVts.Add(1);
+                chaptersPerTitle.Add(channel.Videos.Count);
+            }
+            else
+            {
+                // Multi-title: N titles per VTS with 1 chapter each
+                titlesPerVts.Add(channel.Videos.Count);
+                for (var v = 0; v < channel.Videos.Count; v++)
+                    chaptersPerTitle.Add(1);
+            }
         }
 
         // Build VMG (Video Manager)
@@ -241,13 +259,18 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             vmgMenuVobSectors = (int)(vmgMenuVobSize / 2048);
         }
 
+        // Each channel = 1 VTS; topology per VTS depends on NextChapterAction:
+        // - PlayNextVideo: 1 title with N chapters
+        // - GoToMenu: N titles with 1 chapter each
+        var vmgTitleCount = titlesPerVts.Sum();
         var vmgIfo = DvdIfoWriter.WriteVmgIfo(
-            totalTitleCount, standard, allVtsIfos[0],
+            vmgTitleCount, standard, allVtsIfos[0],
             vtsCount: project.Channels.Count,
             titlesPerVts: titlesPerVts,
             menuPages: channelSelectPages,
             menuVobSectors: vmgMenuVobSectors,
-            hasVtsmMenus: true);
+            hasVtsmMenus: true,
+            chaptersPerTitle: chaptersPerTitle);
 
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.IFO"), vmgIfo, cancellationToken);
         await File.WriteAllBytesAsync(Path.Combine(videoTsDirectory, "VIDEO_TS.BUP"), vmgIfo, cancellationToken);

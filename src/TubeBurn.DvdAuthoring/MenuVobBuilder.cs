@@ -217,19 +217,19 @@ public static class MenuVobBuilder
         // Each group: [SL_COLI:4][AC_COLI:4] (selection + action palette)
         // Each uint32 format: [color3:4][color2:4][color1:4][color0:4][alpha3:4][alpha2:4][alpha1:4][alpha0:4]
         // SPU pixel values: 0 = background (inside button), 1 = border outline
-        // CLUT entries: 0 = black, 1 = white, 2 = highlight color (light blue)
-        // Normal display: pixel 0 = transparent, pixel 1 = white border
-        // Selected: pixel 0 = highlight fill (semi-transparent), pixel 1 = white border
-        // Action: pixel 0 = highlight fill (more opaque), pixel 1 = white border
+        // CLUT entries: 0 = black, 1 = white
+        // Normal display: all transparent (SPU alpha = [0,0,0,0])
+        // Selected: pixel 0 = transparent, pixel 1 = white border (no fill)
+        // Action: pixel 0 = transparent, pixel 1 = white border
         var coliBase = 0xA3;
-        // Group 0 (btn_coln=1): selection — fill button bg with CLUT 2 (highlight), keep white border
-        Write32(buf, coliBase, 0x001200FE);      // SL: color1=1,color0=2, alpha1=F,alpha0=E
-        Write32(buf, coliBase + 4, 0x001200FF);   // AC: alpha0=F (fully opaque on press)
+        // Group 0 (btn_coln=1): selection — white border only, no background fill
+        Write32(buf, coliBase, 0x001000F0);      // SL: color1=1,color0=0, alpha1=F,alpha0=0
+        Write32(buf, coliBase + 4, 0x001000F0);   // AC: same (white border, transparent bg)
         // Groups 1-2 (unused but fill with same values for safety)
-        Write32(buf, coliBase + 8, 0x001200FE);
-        Write32(buf, coliBase + 12, 0x001200FF);
-        Write32(buf, coliBase + 16, 0x001200FE);
-        Write32(buf, coliBase + 20, 0x001200FF);
+        Write32(buf, coliBase + 8, 0x001000F0);
+        Write32(buf, coliBase + 12, 0x001000F0);
+        Write32(buf, coliBase + 16, 0x001000F0);
+        Write32(buf, coliBase + 20, 0x001000F0);
 
         // BTNI entries at 0xBB (18 bytes each)
         // Layout per dvdauthor dvdvob.c (confirmed against DVD spec):
@@ -304,6 +304,7 @@ public static class MenuVobBuilder
         DvdCommand dvdCmd = command.Kind switch
         {
             DvdButtonCommandKind.JumpVtsTt => new JumpVtsTtCommand((byte)command.Target),
+            DvdButtonCommandKind.JumpVtsPtt => new JumpVtsPttCommand(1, (ushort)command.Target),
             DvdButtonCommandKind.JumpSsVtsm => new JumpSsVtsmCommand((byte)command.Target),
             DvdButtonCommandKind.JumpSsVmgm => new JumpSsVmgmCommand(),
             DvdButtonCommandKind.LinkPgcn => new LinkPgcnCommand((ushort)command.Target),

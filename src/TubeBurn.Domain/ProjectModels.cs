@@ -14,6 +14,12 @@ public enum DiscMediaKind
     Dvd9,
 }
 
+public enum TitleEndBehavior
+{
+    PlayNextVideo,
+    GoToMenu,
+}
+
 public sealed record ProjectSettings(
     VideoStandard Standard,
     DiscMediaKind MediaKind,
@@ -28,7 +34,11 @@ public sealed record ProjectSettings(
     string? GrowisofsToolPath = null,
     string? ImgBurnToolPath = null,
     string? VlcToolPath = null,
-    string? BurnDevice = null);
+    string? BurnDevice = null,
+    string FontFamily = "Open Sans Condensed SemiBold",
+    int FontSize = 24,
+    TitleEndBehavior EndOfVideoAction = TitleEndBehavior.GoToMenu,
+    TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo);
 
 public sealed record VideoSource(
     string Url,
@@ -92,14 +102,16 @@ public sealed record MenuButton(
     int Height,
     string Label,
     ButtonNavigation Navigation,
-    DvdButtonCommand ActivateCommand);
+    DvdButtonCommand ActivateCommand,
+    string? ThumbnailPath = null);
 
 public sealed record MenuPage(
     string MenuId,
     int PageNumber,
     IReadOnlyList<MenuButton> Buttons,
     string BackgroundImagePath,
-    MenuPageType Type);
+    MenuPageType Type,
+    string? AvatarImagePath = null);
 
 public enum MenuPageType
 {
@@ -116,6 +128,7 @@ public sealed record DvdButtonCommand(DvdButtonCommandKind Kind, int Target);
 public enum DvdButtonCommandKind
 {
     JumpVtsTt,
+    JumpVtsPtt,
     JumpSsVtsm,
     JumpSsVmgm,
     LinkPgcn,

@@ -458,7 +458,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var pipeline = new NativeAuthoringPipeline();
         var ffmpegPath = ffmpegResolution.ResolvedPath!;
         pipeline.MenuRenderer = (outputDir, page, standard, ct) =>
-            TubeBurn.Infrastructure.MenuBackgroundRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
+            TubeBurn.Infrastructure.SkiaMenuRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
 
         var result = await pipeline.AuthorAsync(
             new DvdBuildRequest(project, _workDir), CancellationToken.None);
@@ -503,7 +503,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var pipeline = new NativeAuthoringPipeline();
         var ffmpegPath = ffmpegResolution.ResolvedPath!;
         pipeline.MenuRenderer = (outputDir, page, standard, ct) =>
-            TubeBurn.Infrastructure.MenuBackgroundRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
+            TubeBurn.Infrastructure.SkiaMenuRenderer.RenderAsync(ffmpegPath, outputDir, page, standard, ct);
 
         var result = await pipeline.AuthorAsync(
             new DvdBuildRequest(project, _workDir), CancellationToken.None);
@@ -565,7 +565,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         Assert.True(btniEntry0[2] != 0 || btniEntry0[1] != 0,
             "First BTNI entry coordinates are all zero");
 
-        // First button command = JumpVTS_TT (30 03)
+        // First button command = JumpVTS_TT (30 03) in multi-title mode
         Assert.Equal(0x30, btniEntry0[10]);
         Assert.Equal(0x03, btniEntry0[11]);
 
@@ -756,7 +756,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         Assert.Equal(0x30, preCmd[0]);
         Assert.Equal(0x06, preCmd[1]); // JumpSS, NOT 0x02 (JumpTT)
 
-        // ── TT_SRPT title count = 2 ──
+        // ── TT_SRPT title count = 2 (multi-title: 2 titles with 1 chapter each) ──
         var titleCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(2048));
         Assert.Equal(2, titleCount);
 
@@ -770,30 +770,34 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task MenuBinary_single_channel_title_post_commands()
+    public async Task MenuBinary_single_channel_multi_chapter_structure()
     {
+        // Pipeline currently uses multi-title topology (useChapters=false).
+        // 2 PGCs with 1 program/cell each, post-commands return to menu.
         var authored = await AuthorSingleChannelMenuDvd();
         if (authored is null) return;
         var (videoTs, vtsIfo, vmgIfo) = authored.Value;
 
         var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(0xCC));
         var pgcitBase = (int)pgcitSec * 2048;
-        var titleCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
-        Assert.Equal(2, titleCount);
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
+        Assert.Equal(2, pgcCount); // 2 PGCs (multi-title)
 
-        // Check ALL title PGC post-commands return to menu
-        for (var t = 0; t < titleCount; t++)
+        // Each PGC has 1 program, 1 cell
+        for (var i = 0; i < pgcCount; i++)
         {
-            var srpOff = pgcitBase + 8 + t * 8;
-            var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(srpOff + 4));
+            var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + i * 8 + 4));
             var pgcAbs = pgcitBase + (int)pgcOff;
-            var cmdOff = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcAbs + 0xE4));
-            var nrPre = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcAbs + cmdOff));
-            var postCmdAbs = pgcAbs + cmdOff + 8 + nrPre * 8;
 
+            Assert.Equal(1, vtsIfo[pgcAbs + 0x02]); // nr_of_programs = 1
+            Assert.Equal(1, vtsIfo[pgcAbs + 0x03]); // nr_of_cells = 1
+
+            // Post-command: CallSS VTSM root
+            var cmdOff = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcAbs + 0xE4));
+            var postCmdAbs = pgcAbs + cmdOff + 8;
             Assert.Equal(0x30, vtsIfo[postCmdAbs]);
-            Assert.Equal(0x08, vtsIfo[postCmdAbs + 1]); // CallSS
-            Assert.Equal(0x83, vtsIfo[postCmdAbs + 5]); // VTSM root
+            Assert.Equal(0x08, vtsIfo[postCmdAbs + 1]);
+            Assert.Equal(0x83, vtsIfo[postCmdAbs + 5]);
         }
     }
 
@@ -881,9 +885,9 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var vtsCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(0x3E));
         Assert.Equal(2, vtsCount);
 
-        // ── TT_SRPT spans 2 VTS numbers ──
+        // ── TT_SRPT: multi-title → 2 titles per VTS × 2 VTS = 4 titles total ──
         var titleCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(2048));
-        Assert.Equal(4, titleCount); // 2 + 2
+        Assert.Equal(4, titleCount);
 
         var vtsNumbers = new HashSet<byte>();
         for (var t = 0; t < titleCount; t++)
@@ -926,7 +930,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
             Assert.True((vtsmMenuExist & 0x40) == 0x40,
                 $"{vtsTag} VTSM_PGCI_UT menu_existence must have bit 6 set (root menu), got 0x{vtsmMenuExist:X2}");
 
-            // Video-select buttons use JumpVTS_TT (0x30, 0x03)
+            // Video-select buttons use JumpVTS_TT (0x30, 0x03) in multi-title mode
             var menuVob = new byte[2048];
             await using (var fs = File.OpenRead(menuVobPath))
             {
@@ -978,7 +982,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var vtsCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(0x3E));
         Assert.Equal(3, vtsCount);
 
-        // Total titles = 4 + 2 + 1 = 7
+        // Total titles = 7 (multi-title: 4+2+1 videos = 7 titles across 3 VTSes)
         var titleCount = BinaryPrimitives.ReadUInt16BigEndian(vmgIfo.AsSpan(2048));
         Assert.Equal(7, titleCount);
 

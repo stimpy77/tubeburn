@@ -598,6 +598,8 @@ public partial class MainWindow : Window
             project.Settings.MediaKind,
             project.Settings.PreferExternalAuthoring,
             project.Settings.OutputDirectory,
+            project.Settings.EndOfVideoAction,
+            project.Settings.NextChapterAction,
             project.Videos.Count);
 
         var videoSignature = string.Join(

@@ -39,6 +39,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _selectedBurnDrive = AutoBurnDriveLabel;
     private bool _burnEnabled = true;
     private bool _ejectAfterBurn = true;
+    private bool _endOfVideoGoToMenu = true;   // default: end of video → go to menu
+    private bool _nextChapterPlayNext = true;   // default: >>| → play next video
     private string _lastAuthoredWorkingDirectory = string.Empty;
     private string _lastFailureDetail = string.Empty;
     private string _logFilePath = string.Empty;
@@ -219,6 +221,18 @@ public sealed class MainWindowViewModel : ObservableObject
         set => SetProperty(ref _ejectAfterBurn, value);
     }
 
+    public bool EndOfVideoGoToMenu
+    {
+        get => _endOfVideoGoToMenu;
+        set => SetProperty(ref _endOfVideoGoToMenu, value);
+    }
+
+    public bool NextChapterPlayNext
+    {
+        get => _nextChapterPlayNext;
+        set => SetProperty(ref _nextChapterPlayNext, value);
+    }
+
     public string LastAuthoredWorkingDirectory
     {
         get => _lastAuthoredWorkingDirectory;
@@ -388,6 +402,8 @@ public sealed class MainWindowViewModel : ObservableObject
         SelectedBurnDrive = string.IsNullOrWhiteSpace(project.Settings.BurnDevice)
             ? AutoBurnDriveLabel
             : project.Settings.BurnDevice;
+        EndOfVideoGoToMenu = project.Settings.EndOfVideoAction == TitleEndBehavior.GoToMenu;
+        NextChapterPlayNext = project.Settings.NextChapterAction == TitleEndBehavior.PlayNextVideo;
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var channel in project.Channels)
@@ -451,7 +467,9 @@ public sealed class MainWindowViewModel : ObservableObject
             GrowisofsToolPath: NormalizeToolPath(GrowisofsToolPath),
             ImgBurnToolPath: NormalizeToolPath(ImgBurnToolPath),
             VlcToolPath: NormalizeToolPath(VlcToolPath),
-            BurnDevice: NormalizeBurnDevice(SelectedBurnDrive));
+            BurnDevice: NormalizeBurnDevice(SelectedBurnDrive),
+            EndOfVideoAction: EndOfVideoGoToMenu ? TitleEndBehavior.GoToMenu : TitleEndBehavior.PlayNextVideo,
+            NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu);
 
         var channels = Queue
             .GroupBy(
