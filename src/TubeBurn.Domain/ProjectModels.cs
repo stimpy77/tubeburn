@@ -41,7 +41,7 @@ public sealed record ProjectSettings(
     string? ImgBurnToolPath = null,
     string? VlcToolPath = null,
     string? BurnDevice = null,
-    string FontFamily = "Open Sans Condensed SemiBold",
+    string FontFamily = "Open Sans SemiCondensed",
     int FontSize = 24,
     string MenuTitle = "Select Channel",
     TitleEndBehavior EndOfVideoAction = TitleEndBehavior.GoToMenu,

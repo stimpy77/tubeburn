@@ -281,7 +281,7 @@
                         <Border Classes="card">
                             <StackPanel Spacing="14">
                                 <TextBlock Classes="sectionTitle" Text="Project Settings" />
-                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                     <StackPanel Grid.Row="0" Grid.Column="0" Spacing="6">
                                         <TextBlock Classes="eyebrow" Text="VIDEO STANDARD" />
                                         <ComboBox ItemsSource="{Binding VideoStandards}" SelectedItem="{Binding SelectedVideoStandard, Mode=TwoWay}" />
@@ -317,7 +317,18 @@
                                         <TextBlock Classes="eyebrow" Text="MENU TITLE" />
                                         <TextBox Text="{Binding MenuTitle, Mode=TwoWay}" Watermark="Select Channel" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="5" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="MENU FONT" />
+                                        <ComboBox ItemsSource="{Binding FontFamilies}"
+                                                  SelectedItem="{Binding SelectedFontFamily, Mode=TwoWay}"
+                                                  MaxDropDownHeight="300" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="5" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="FONT SIZE" />
+                                        <ComboBox ItemsSource="{Binding FontSizes}"
+                                                  SelectedItem="{Binding SelectedFontSize, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="ASPECT RATIO" />
                                         <StackPanel Spacing="4">
                                             <ToggleSwitch IsChecked="{Binding NormalizeResolution, Mode=TwoWay}"

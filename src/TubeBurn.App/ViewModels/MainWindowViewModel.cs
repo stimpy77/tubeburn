@@ -57,6 +57,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _menuTitle = "Select Channel";
     private bool _normalizeResolution;
     private bool _normalizeVignette = true;
+    private string _selectedFontFamily = "Open Sans SemiCondensed";
+    private int _selectedFontSize = 24;
 
     public MainWindowViewModel()
     {
@@ -68,6 +70,8 @@ public sealed class MainWindowViewModel : ObservableObject
         WriteSpeeds = new ReadOnlyCollection<string>(new List<string> { "1x", "2x", "3x", "4x", "8x", "12x", "16x" });
         AvailableBackends = new ReadOnlyCollection<string>(new List<string> { "NativePort", "ExternalBridge" });
         VideoBitrates = new ReadOnlyCollection<string>(new List<string> { "Max (~6 Mbps)", "~5 Mbps", "~4 Mbps", "~3 Mbps", "~2 Mbps" });
+        FontFamilies = new ReadOnlyCollection<string>(SkiaMenuRenderer.GetAvailableFontFamilies().ToList());
+        FontSizes = new ReadOnlyCollection<int>([16, 18, 20, 22, 24, 26, 28, 30, 32, 36]);
 
         Metrics = new ObservableCollection<MetricTile>();
         Queue = new ObservableCollection<QueuedVideoItem>();
@@ -301,6 +305,10 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public ReadOnlyCollection<string> VideoBitrates { get; }
 
+    public ReadOnlyCollection<string> FontFamilies { get; }
+
+    public ReadOnlyCollection<int> FontSizes { get; }
+
     public ObservableCollection<MetricTile> Metrics { get; }
 
     public ObservableCollection<QueuedVideoItem> Queue { get; }
@@ -359,6 +367,18 @@ public sealed class MainWindowViewModel : ObservableObject
     {
         get => _normalizeVignette;
         set => SetProperty(ref _normalizeVignette, value);
+    }
+
+    public string SelectedFontFamily
+    {
+        get => _selectedFontFamily;
+        set => SetProperty(ref _selectedFontFamily, value);
+    }
+
+    public int SelectedFontSize
+    {
+        get => _selectedFontSize;
+        set => SetProperty(ref _selectedFontSize, value);
     }
 
     public string ProjectSummary =>
@@ -464,6 +484,10 @@ public sealed class MainWindowViewModel : ObservableObject
         NextChapterPlayNext = project.Settings.NextChapterAction == TitleEndBehavior.PlayNextVideo;
         NormalizeResolution = project.Settings.NormalizeResolution;
         NormalizeVignette = project.Settings.NormalizeVignette;
+        SelectedFontFamily = string.IsNullOrWhiteSpace(project.Settings.FontFamily)
+            ? "Open Sans SemiCondensed"
+            : project.Settings.FontFamily;
+        SelectedFontSize = project.Settings.FontSize > 0 ? project.Settings.FontSize : 24;
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var channel in project.Channels)
@@ -536,7 +560,9 @@ public sealed class MainWindowViewModel : ObservableObject
             EndOfVideoAction: EndOfVideoGoToMenu ? TitleEndBehavior.GoToMenu : TitleEndBehavior.PlayNextVideo,
             NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu,
             NormalizeResolution: NormalizeResolution,
-            NormalizeVignette: NormalizeVignette);
+            NormalizeVignette: NormalizeVignette,
+            FontFamily: SelectedFontFamily,
+            FontSize: SelectedFontSize);
 
         var channels = Queue
             .GroupBy(
@@ -1070,7 +1096,7 @@ public sealed class MainWindowViewModel : ObservableObject
         if (_previewPages.Count == 0) return;
 
         var page = _previewPages[_previewPageIndex];
-        var pngBytes = SkiaMenuRenderer.RenderPreview(page, standard);
+        var pngBytes = SkiaMenuRenderer.RenderPreview(page, standard, SelectedFontFamily, SelectedFontSize);
 
         using var stream = new MemoryStream(pngBytes);
         MenuPreviewImage = new Bitmap(stream);

@@ -12,7 +12,7 @@ namespace TubeBurn.Infrastructure;
 /// </summary>
 public static class SkiaMenuRenderer
 {
-    private const string DefaultFontFamily = "Open Sans Condensed SemiBold";
+    private const string DefaultFontFamily = "Open Sans SemiCondensed";
     private const string FallbackFontFamily = "Arial";
     private const string Ellipsis = "\u2026"; // …
 
@@ -32,12 +32,25 @@ public static class SkiaMenuRenderer
     private const int ThumbnailWidth = 80;
     private const int ThumbnailHeight = 45;
 
+    /// <summary>
+    /// Returns the list of available font families from SkiaSharp's font manager.
+    /// </summary>
+    public static IReadOnlyList<string> GetAvailableFontFamilies()
+    {
+        var families = SKFontManager.Default.FontFamilies
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return families;
+    }
+
     public static async Task<string> RenderAsync(
         string ffmpegPath,
         string outputDirectory,
         MenuPage page,
         VideoStandard standard,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? fontFamily = null,
+        int fontSize = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ffmpegPath);
         ArgumentNullException.ThrowIfNull(page);
@@ -51,7 +64,7 @@ public static class SkiaMenuRenderer
         var pngPath = Path.Combine(outputDirectory, $"menu-{safeName}-p{page.PageNumber}.png");
         var mpgPath = Path.Combine(outputDirectory, $"menu-{safeName}-p{page.PageNumber}.mpg");
 
-        RenderToPng(page, width, height, pngPath);
+        RenderToPng(page, width, height, pngPath, fontFamily, fontSize);
 
         var target = standard == VideoStandard.Ntsc ? "ntsc-dvd" : "pal-dvd";
         var args = $"-loop 1 -i \"{pngPath}\" -t 1 -target {target} -aspect 16:9 -an -y \"{mpgPath}\"";
@@ -67,7 +80,8 @@ public static class SkiaMenuRenderer
     /// Renders menu to PNG bytes (for UI preview without ffmpeg encoding).
     /// Output is stretched to 16:9 display aspect ratio to match how DVD players render it.
     /// </summary>
-    public static byte[] RenderPreview(MenuPage page, VideoStandard standard)
+    public static byte[] RenderPreview(MenuPage page, VideoStandard standard,
+        string? fontFamily = null, int fontSize = 0)
     {
         var width = 720;
         var height = standard == VideoStandard.Ntsc ? 480 : 576;
@@ -75,7 +89,7 @@ public static class SkiaMenuRenderer
         // Render at DVD storage resolution
         using var bitmap = new SKBitmap(width, height);
         using var canvas = new SKCanvas(bitmap);
-        RenderToCanvas(canvas, page, width, height);
+        RenderToCanvas(canvas, page, width, height, fontFamily, fontSize);
 
         // Stretch to 16:9 display aspect ratio (PAR 40:33 for NTSC, 16:11 for PAL)
         var displayWidth = standard == VideoStandard.Ntsc
@@ -90,11 +104,12 @@ public static class SkiaMenuRenderer
         return data.ToArray();
     }
 
-    private static void RenderToPng(MenuPage page, int width, int height, string outputPath)
+    private static void RenderToPng(MenuPage page, int width, int height, string outputPath,
+        string? fontFamily = null, int fontSize = 0)
     {
         using var bitmap = new SKBitmap(width, height);
         using var canvas = new SKCanvas(bitmap);
-        RenderToCanvas(canvas, page, width, height);
+        RenderToCanvas(canvas, page, width, height, fontFamily, fontSize);
 
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
@@ -108,7 +123,8 @@ public static class SkiaMenuRenderer
     private const float ParScale = 33f / 40f; // 0.825
     private const float ParOffset = 720f * (1f - ParScale) / 2f; // ~63px centering offset
 
-    private static void RenderToCanvas(SKCanvas canvas, MenuPage page, int width, int height)
+    private static void RenderToCanvas(SKCanvas canvas, MenuPage page, int width, int height,
+        string? fontFamily = null, int fontSize = 0)
     {
         // Draw full-frame background before PAR transform
         if (page.Type == MenuPageType.ChannelSelect)
@@ -137,26 +153,29 @@ public static class SkiaMenuRenderer
         canvas.Scale(ParScale, 1f);
 
         if (page.Type == MenuPageType.ChannelSelect)
-            RenderChannelSelectContent(canvas, page, width, height);
+            RenderChannelSelectContent(canvas, page, width, height, fontFamily, fontSize);
         else
-            RenderVideoSelectContent(canvas, page, width, height);
+            RenderVideoSelectContent(canvas, page, width, height, fontFamily, fontSize);
 
         canvas.Restore();
     }
 
     // ── Level 1: Channel Select ──────────────────────────────────────
 
-    private static void RenderChannelSelectContent(SKCanvas canvas, MenuPage page, int width, int height)
+    private static void RenderChannelSelectContent(SKCanvas canvas, MenuPage page, int width, int height,
+        string? fontFamily = null, int fontSize = 0)
     {
-        var typeface = ResolveTypeface();
+        var typeface = ResolveTypeface(fontFamily);
+        var baseFontSize = fontSize > 0 ? fontSize : 22f;
+        var headerFontSize = baseFontSize * 1.45f; // header ~45% larger than labels
 
         // Header
-        using var headerFont = new SKFont(typeface, 32f);
+        using var headerFont = new SKFont(typeface, headerFontSize);
         using var headerPaint = new SKPaint { Color = L1HeaderColor, IsAntialias = true };
         canvas.DrawText(page.MenuId, 60, 50, SKTextAlign.Left, headerFont, headerPaint);
 
         // Button rows
-        using var labelFont = new SKFont(typeface, 22f);
+        using var labelFont = new SKFont(typeface, baseFontSize);
         using var labelPaint = new SKPaint { Color = L1TextColor, IsAntialias = true };
         using var borderPaint = new SKPaint
         {
@@ -235,9 +254,12 @@ public static class SkiaMenuRenderer
 
     // ── Level 2: Video Select ────────────────────────────────────────
 
-    private static void RenderVideoSelectContent(SKCanvas canvas, MenuPage page, int width, int height)
+    private static void RenderVideoSelectContent(SKCanvas canvas, MenuPage page, int width, int height,
+        string? fontFamily = null, int fontSize = 0)
     {
-        var typeface = ResolveTypeface();
+        var typeface = ResolveTypeface(fontFamily);
+        var baseFontSize = fontSize > 0 ? fontSize : 22f;
+        var headerFontSize = baseFontSize * 1.36f; // header ~36% larger than labels
 
         // Header: channel name + avatar
         var headerY = 18;
@@ -253,7 +275,7 @@ public static class SkiaMenuRenderer
             headerTextX = 66f;
         }
 
-        using var headerFont = new SKFont(typeface, 30f);
+        using var headerFont = new SKFont(typeface, headerFontSize);
         using var headerPaint = new SKPaint { Color = L2TextColor, IsAntialias = true };
         canvas.DrawText(page.MenuId, headerTextX, headerY + 30f, SKTextAlign.Left, headerFont, headerPaint);
 
@@ -262,7 +284,7 @@ public static class SkiaMenuRenderer
         canvas.DrawLine(20, 55, width - 20, 55, linePaint);
 
         // Button rows
-        using var labelFont = new SKFont(typeface, 22f);
+        using var labelFont = new SKFont(typeface, baseFontSize);
         using var labelPaint = new SKPaint { Color = L2TextColor, IsAntialias = true };
         using var rowBgPaint = new SKPaint { Color = new SKColor(0, 0, 0, 60), IsAntialias = true };
 
@@ -413,11 +435,21 @@ public static class SkiaMenuRenderer
     private static SKTypeface ResolveTypeface(string? fontFamily = null)
     {
         var family = fontFamily ?? DefaultFontFamily;
-        var typeface = SKTypeface.FromFamilyName(family);
-        if (typeface is null || (family == DefaultFontFamily &&
-            typeface.FamilyName.Equals("Segoe UI", StringComparison.OrdinalIgnoreCase)))
+
+        // Request SemiBold weight — this gives us "Open Sans Condensed SemiBold"
+        // when the family is "Open Sans Condensed", and a reasonable weight for other fonts.
+        var style = new SKFontStyle(SKFontStyleWeight.SemiBold, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright);
+        var typeface = SKTypeface.FromFamilyName(family, style);
+
+        // SkiaSharp silently substitutes a system default (e.g. Segoe UI) when the
+        // requested family isn't found. Detect this and fall back explicitly.
+        if (typeface is null || !typeface.FamilyName.Equals(family, StringComparison.OrdinalIgnoreCase))
         {
-            typeface = SKTypeface.FromFamilyName(FallbackFontFamily) ?? SKTypeface.Default;
+            if (!string.Equals(family, DefaultFontFamily, StringComparison.OrdinalIgnoreCase))
+                typeface = SKTypeface.FromFamilyName(DefaultFontFamily, style);
+
+            if (typeface is null || !typeface.FamilyName.Equals(DefaultFontFamily, StringComparison.OrdinalIgnoreCase))
+                typeface = SKTypeface.FromFamilyName(FallbackFontFamily, style) ?? SKTypeface.Default;
         }
         return typeface;
     }
