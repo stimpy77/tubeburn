@@ -265,11 +265,18 @@ public sealed class MediaPipelineService
         // original source file — the transcoded DVD file is always 720×480 regardless
         // of aspect ratio, so post-transcode blur-fill has no visible effect.
         var videosNeedingBlurFill = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (project.Settings.NormalizeResolution)
-        {
-            DvdAspectRatio EffectiveAspect(VideoSource v) =>
-                detectedAspectRatios.GetValueOrDefault(v.Url, v.AspectRatio);
 
+        DvdAspectRatio EffectiveAspect(VideoSource v) =>
+            detectedAspectRatios.GetValueOrDefault(v.Url, v.AspectRatio);
+
+        if (project.Settings.ForceWidescreen)
+        {
+            // Force all 4:3 videos to 16:9 via blur-fill, regardless of mix.
+            foreach (var v in allVideos.Where(v => EffectiveAspect(v) != DvdAspectRatio.Wide16x9))
+                videosNeedingBlurFill.Add(v.Url);
+        }
+        else if (project.Settings.NormalizeResolution)
+        {
             foreach (var channel in project.Channels)
             {
                 var has16x9 = channel.Videos.Any(v => EffectiveAspect(v) == DvdAspectRatio.Wide16x9);

@@ -599,10 +599,11 @@ public static class DvdIfoWriter
 
             if (i < videoCount - 1 && (endOfVideoAction == TitleEndBehavior.PlayNextVideo || menuPages is null))
             {
-                // LinkPGCN next — chain to next title on end-of-playback.
-                pgc[cmdOff + 8] = 0x20;
-                pgc[cmdOff + 9] = 0x04;
-                pgc[cmdOff + 15] = (byte)(i + 2);
+                // JumpVTS_TT(next) — jump to next title on end-of-playback.
+                // Uses title-jump (0x30 0x03) instead of LinkPGCN for hardware player compatibility.
+                pgc[cmdOff + 8] = 0x30;
+                pgc[cmdOff + 9] = 0x03;
+                pgc[cmdOff + 13] = (byte)(i + 2);
             }
             else if (menuPages is not null)
             {

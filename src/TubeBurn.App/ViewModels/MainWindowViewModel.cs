@@ -57,6 +57,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _menuTitle = "Select Channel";
     private bool _normalizeResolution;
     private bool _normalizeVignette = true;
+    private bool _forceWidescreen;
     private string _selectedFontFamily = "Open Sans SemiCondensed";
     private int _selectedFontSize = 24;
 
@@ -381,6 +382,12 @@ public sealed class MainWindowViewModel : ObservableObject
         set => SetProperty(ref _normalizeVignette, value);
     }
 
+    public bool ForceWidescreen
+    {
+        get => _forceWidescreen;
+        set => SetProperty(ref _forceWidescreen, value);
+    }
+
     public string SelectedFontFamily
     {
         get => _selectedFontFamily;
@@ -509,6 +516,7 @@ public sealed class MainWindowViewModel : ObservableObject
         NextChapterPlayNext = project.Settings.NextChapterAction == TitleEndBehavior.PlayNextVideo;
         NormalizeResolution = project.Settings.NormalizeResolution;
         NormalizeVignette = project.Settings.NormalizeVignette;
+        ForceWidescreen = project.Settings.ForceWidescreen;
         SelectedFontFamily = string.IsNullOrWhiteSpace(project.Settings.FontFamily)
             ? "Open Sans SemiCondensed"
             : project.Settings.FontFamily;
@@ -586,6 +594,7 @@ public sealed class MainWindowViewModel : ObservableObject
             NextChapterAction: NextChapterPlayNext ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu,
             NormalizeResolution: NormalizeResolution,
             NormalizeVignette: NormalizeVignette,
+            ForceWidescreen: ForceWidescreen,
             FontFamily: SelectedFontFamily,
             FontSize: SelectedFontSize);
 

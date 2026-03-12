@@ -363,6 +363,9 @@
                                             <ToggleSwitch IsChecked="{Binding NormalizeResolution, Mode=TwoWay}"
                                                           OnContent="Blur-fill mixed ratios to 16:9" OffContent="Pillarbox (black bars)"
                                                           Content="Normalize resolution" />
+                                            <ToggleSwitch IsChecked="{Binding ForceWidescreen, Mode=TwoWay}"
+                                                          OnContent="Force all 4:3 to 16:9" OffContent="Keep native aspect ratio"
+                                                          Content="Force all to 16:9" />
                                             <ToggleSwitch IsChecked="{Binding NormalizeVignette, Mode=TwoWay}"
                                                           IsVisible="{Binding NormalizeResolution}"
                                                           OnContent="Yes" OffContent="No"

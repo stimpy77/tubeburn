@@ -46,7 +46,15 @@ public sealed class DvdProjectParser
         string? GrowisofsToolPath = null,
         string? ImgBurnToolPath = null,
         string? VlcToolPath = null,
-        string? BurnDevice = null)
+        string? BurnDevice = null,
+        string? FontFamily = null,
+        int FontSize = 24,
+        string? MenuTitle = null,
+        string? EndOfVideoAction = null,
+        string? NextChapterAction = null,
+        bool NormalizeResolution = false,
+        bool NormalizeVignette = true,
+        bool ForceWidescreen = false)
     {
         public ProjectSettings ToSettings() =>
             new(
@@ -63,7 +71,15 @@ public sealed class DvdProjectParser
                 GrowisofsToolPath: GrowisofsToolPath,
                 ImgBurnToolPath: ImgBurnToolPath,
                 VlcToolPath: VlcToolPath,
-                BurnDevice: BurnDevice);
+                BurnDevice: BurnDevice,
+                FontFamily: FontFamily ?? "Open Sans SemiCondensed",
+                FontSize: FontSize,
+                MenuTitle: MenuTitle ?? "Select Channel",
+                EndOfVideoAction: Enum.TryParse<TitleEndBehavior>(EndOfVideoAction, true, out var eov) ? eov : TitleEndBehavior.PlayNextVideo,
+                NextChapterAction: Enum.TryParse<TitleEndBehavior>(NextChapterAction, true, out var nca) ? nca : TitleEndBehavior.PlayNextVideo,
+                NormalizeResolution: NormalizeResolution,
+                NormalizeVignette: NormalizeVignette,
+                ForceWidescreen: ForceWidescreen);
     }
 
     private sealed record ChannelDocument(

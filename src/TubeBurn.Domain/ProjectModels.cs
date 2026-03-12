@@ -47,7 +47,8 @@ public sealed record ProjectSettings(
     TitleEndBehavior EndOfVideoAction = TitleEndBehavior.PlayNextVideo,
     TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo,
     bool NormalizeResolution = false,
-    bool NormalizeVignette = true);
+    bool NormalizeVignette = true,
+    bool ForceWidescreen = false);
 
 public sealed record VideoSource(
     string Url,
