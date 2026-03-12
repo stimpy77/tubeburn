@@ -495,6 +495,12 @@ public partial class MainWindow : Window
                 return;
             }
             await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
+
+            // Ensure channel banners/avatars are downloaded before authoring so menus have images.
+            await EnsureThumbnailsDownloadedAsync();
+            // Re-snapshot project to pick up any newly-downloaded image paths.
+            project = ViewModel.BuildProject();
+
             ViewModel.MarkAuthoringStarted();
             AppLog.Info("Authoring started.");
 
@@ -843,6 +849,10 @@ public partial class MainWindow : Window
                 await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
             }
 
+            // Ensure channel banners/avatars are downloaded before authoring so menus have images.
+            await EnsureThumbnailsDownloadedAsync();
+            project = ViewModel.BuildProject();
+
             ViewModel.MarkAuthoringStarted();
             AppLog.Info("Authoring started.");
 
@@ -926,10 +936,10 @@ public partial class MainWindow : Window
         // Render immediately with whatever we have
         ViewModel.GenerateMenuPreview();
 
-        // Then download missing thumbnails/channel banners and re-render
+        // Then download missing or stale thumbnails/channel banners and re-render
         var hadMissingAssets = ViewModel.Queue.Any(item =>
-            string.IsNullOrWhiteSpace(item.ThumbnailPath) ||
-            string.IsNullOrWhiteSpace(item.ChannelBannerPath));
+            string.IsNullOrWhiteSpace(item.ThumbnailPath) || !File.Exists(item.ThumbnailPath) ||
+            string.IsNullOrWhiteSpace(item.ChannelBannerPath) || !File.Exists(item.ChannelBannerPath));
         if (hadMissingAssets)
         {
             ViewModel.IsPreviewBusy = true;
@@ -1011,9 +1021,9 @@ public partial class MainWindow : Window
             ? Path.GetTempPath()
             : ViewModel.OutputFolder;
 
-        // Download missing video thumbnails
+        // Download missing or stale video thumbnails (path empty OR file no longer exists)
         var itemsMissingThumbs = ViewModel.Queue
-            .Where(item => string.IsNullOrWhiteSpace(item.ThumbnailPath))
+            .Where(item => string.IsNullOrWhiteSpace(item.ThumbnailPath) || !File.Exists(item.ThumbnailPath))
             .ToList();
 
         if (itemsMissingThumbs.Count > 0)
@@ -1077,7 +1087,8 @@ public partial class MainWindow : Window
             return;
 
         var channelGroups = ViewModel.Queue
-            .Where(item => !string.IsNullOrWhiteSpace(item.ChannelUrl) && string.IsNullOrWhiteSpace(item.ChannelBannerPath))
+            .Where(item => !string.IsNullOrWhiteSpace(item.ChannelUrl) &&
+                (string.IsNullOrWhiteSpace(item.ChannelBannerPath) || !File.Exists(item.ChannelBannerPath)))
             .GroupBy(item => item.ChannelUrl, StringComparer.OrdinalIgnoreCase)
             .ToList();
 

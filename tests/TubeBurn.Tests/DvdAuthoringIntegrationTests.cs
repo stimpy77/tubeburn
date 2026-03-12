@@ -802,10 +802,10 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task MenuBinary_play_next_video_chains_with_jump_vts_tt()
+    public async Task MenuBinary_play_next_video_chains_pgcs_with_link()
     {
-        // PlayNextVideo: multi-title topology with JumpVTS_TT post-commands.
-        // PGC 1 → JumpVTS_TT(2), PGC 2 → CallSS VTSM (last video returns to menu).
+        // PlayNextVideo: multi-title topology with LinkPGCN post-commands + next/prev PGC headers.
+        // PGC 1 → LinkPGCN(2), PGC 2 → CallSS VTSM (last video returns to menu).
         var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
         if (authored is null) return;
         var (videoTs, vtsIfo, vmgIfo) = authored.Value;
@@ -815,14 +815,14 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
         Assert.Equal(2, pgcCount); // 2 PGCs (multi-title)
 
-        // PGC 1: post-command = JumpVTS_TT(2)
+        // PGC 1: post-command = LinkPGCN(2)
         var pgc1Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 4));
         var pgc1Abs = pgcitBase + (int)pgc1Off;
         var cmd1Off = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc1Abs + 0xE4));
         var post1Abs = pgc1Abs + cmd1Off + 8;
-        Assert.Equal(0x30, vtsIfo[post1Abs]);     // JumpVTS_TT opcode
-        Assert.Equal(0x03, vtsIfo[post1Abs + 1]);
-        Assert.Equal(2, vtsIfo[post1Abs + 5]);    // target title = 2
+        Assert.Equal(0x20, vtsIfo[post1Abs]);     // LinkPGCN opcode
+        Assert.Equal(0x04, vtsIfo[post1Abs + 1]);
+        Assert.Equal(2, vtsIfo[post1Abs + 7]);    // target PGCN = 2
 
         // PGC 2: post-command = CallSS VTSM root (return to menu)
         var pgc2Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 8 + 4));
@@ -832,6 +832,69 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         Assert.Equal(0x30, vtsIfo[post2Abs]);     // CallSS opcode
         Assert.Equal(0x08, vtsIfo[post2Abs + 1]);
         Assert.Equal(0x83, vtsIfo[post2Abs + 5]); // VTSM root
+    }
+
+    [Fact]
+    public async Task MenuBinary_play_next_video_populates_next_prev_pgc_nr()
+    {
+        // Hardware players (Sony etc.) rely on next_pgc_nr / prev_pgc_nr PGC header
+        // fields for sequential title playback, not just post-commands.
+        var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
+        if (authored is null) return;
+        var (videoTs, vtsIfo, vmgIfo) = authored.Value;
+
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
+        Assert.Equal(2, pgcCount);
+
+        // PGC 1: next_pgc_nr = 2, prev_pgc_nr = 0
+        var pgc1Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 4));
+        var pgc1Abs = pgcitBase + (int)pgc1Off;
+        var pgc1NextPgc = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc1Abs + 0x9C));
+        var pgc1PrevPgc = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc1Abs + 0x9E));
+        Assert.Equal(2, pgc1NextPgc);
+        Assert.Equal(0, pgc1PrevPgc);
+
+        // PGC 2: next_pgc_nr = 0, prev_pgc_nr = 1
+        var pgc2Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 8 + 4));
+        var pgc2Abs = pgcitBase + (int)pgc2Off;
+        var pgc2NextPgc = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc2Abs + 0x9C));
+        var pgc2PrevPgc = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc2Abs + 0x9E));
+        Assert.Equal(0, pgc2NextPgc);
+        Assert.Equal(1, pgc2PrevPgc);
+    }
+
+    [Fact]
+    public async Task MenuBinary_cell_playback_first_ilvu_end_sector_equals_last_sector()
+    {
+        // Hardware players (Sony etc.) need first_ilvu_end_sector populated even for
+        // non-interleaved cells. dvdauthor sets it to last_sector; leaving it 0 causes
+        // the player to skip playback and jump straight to the post-command.
+        var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
+        if (authored is null) return;
+        var (videoTs, vtsIfo, vmgIfo) = authored.Value;
+
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
+        Assert.Equal(2, pgcCount);
+
+        for (var i = 0; i < pgcCount; i++)
+        {
+            var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + i * 8 + 4));
+            var pgcAbs = pgcitBase + (int)pgcOff;
+
+            var cpbOffset = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcAbs + 0xE8));
+            var cpbAbs = pgcAbs + cpbOffset;
+
+            var firstIlvuEnd = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(cpbAbs + 0x0C));
+            var lastSector = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(cpbAbs + 0x14));
+
+            Assert.True(firstIlvuEnd == lastSector,
+                $"PGC {i + 1}: first_ilvu_end_sector ({firstIlvuEnd}) must equal last_sector ({lastSector})");
+            Assert.True(lastSector != 0u, $"PGC {i + 1}: last_sector should not be 0");
+        }
     }
 
     [Fact]

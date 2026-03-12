@@ -529,12 +529,14 @@ public static class DvdIfoWriter
                 ? (int)(vobDurationsPts[c] / 90000)
                 : EstimateDurationSeconds(vobFileSizes[c]);
             WriteBcdTime(cell[4..], dur, fps, fpsFlag);
+            var lastSector = (uint)(vobStart[c] + vobSectors[c] - 1);
             Write32(cell, 8, (uint)vobStart[c]);
+            Write32(cell, 12, lastSector);            // first_ilvu_end_sector (= last_sector for non-interleaved)
             var lastVobuStart = vobuSectorOffsets is not null && c < vobuSectorOffsets.Count && vobuSectorOffsets[c].Count > 0
                 ? (uint)vobuSectorOffsets[c][^1]
                 : (uint)vobStart[c];
             Write32(cell, 16, lastVobuStart);
-            Write32(cell, 20, (uint)(vobStart[c] + vobSectors[c] - 1));
+            Write32(cell, 20, lastSector);
         }
 
         // Cell position: N entries (4 bytes each)
@@ -575,10 +577,11 @@ public static class DvdIfoWriter
 
             Write16(pgc, 0x0C, 0x8000);
 
-            // next/prev PGC links
-            if (nextChapterAction == TitleEndBehavior.PlayNextVideo)
+            // next/prev PGC links — required by hardware players (Sony, etc.) for
+            // sequential title playback, even when post-commands also handle chaining.
+            if (endOfVideoAction == TitleEndBehavior.PlayNextVideo ||
+                nextChapterAction == TitleEndBehavior.PlayNextVideo)
             {
-                // This branch only fires when no menus (backward compat auto-play)
                 Write16(pgc, 0x9C, i < videoCount - 1 ? (ushort)(i + 2) : (ushort)0);
                 Write16(pgc, 0x9E, i > 0 ? (ushort)i : (ushort)0);
             }
@@ -599,11 +602,10 @@ public static class DvdIfoWriter
 
             if (i < videoCount - 1 && (endOfVideoAction == TitleEndBehavior.PlayNextVideo || menuPages is null))
             {
-                // JumpVTS_TT(next) — jump to next title on end-of-playback.
-                // Uses title-jump (0x30 0x03) instead of LinkPGCN for hardware player compatibility.
-                pgc[cmdOff + 8] = 0x30;
-                pgc[cmdOff + 9] = 0x03;
-                pgc[cmdOff + 13] = (byte)(i + 2);
+                // LinkPGCN(next) — chain to next PGC within this VTS on end-of-playback.
+                pgc[cmdOff + 8] = 0x20;
+                pgc[cmdOff + 9] = 0x04;
+                pgc[cmdOff + 15] = (byte)(i + 2);
             }
             else if (menuPages is not null)
             {
@@ -624,12 +626,14 @@ public static class DvdIfoWriter
 
             var c = pgc.Slice(cpbOff, 24);
             WriteBcdTime(c[4..], durationSeconds, fps, fpsFlag);
+            var lastSector = (uint)(vobStart[i] + vobSectors[i] - 1);
             Write32(c, 8, (uint)vobStart[i]);
+            Write32(c, 12, lastSector);              // first_ilvu_end_sector (= last_sector for non-interleaved)
             var lastVobuStart = vobuSectorOffsets is not null && i < vobuSectorOffsets.Count && vobuSectorOffsets[i].Count > 0
                 ? (uint)vobuSectorOffsets[i][^1]
                 : (uint)vobStart[i];
             Write32(c, 16, lastVobuStart);
-            Write32(c, 20, (uint)(vobStart[i] + vobSectors[i] - 1));
+            Write32(c, 20, lastSector);
 
             var p = pgc.Slice(cpsOff, 4);
             Write16(p, 0, (ushort)(i + 1));
@@ -786,6 +790,7 @@ public static class DvdIfoWriter
             else
                 lastSector = pageSector;
             Write32(c, 8, pageSector);                          // first_sector
+            Write32(c, 12, lastSector);                         // first_ilvu_end_sector (= last_sector for non-interleaved)
             Write32(c, 16, pageSector);                         // last_vobu_start
             Write32(c, 20, lastSector);                         // last_sector
 
