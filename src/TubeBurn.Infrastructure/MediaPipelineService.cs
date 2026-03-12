@@ -86,7 +86,8 @@ public sealed class MediaPipelineService
         TubeBurnProject project,
         string workingDirectory,
         Action<MediaPipelineProgress>? onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool skipDownload = false)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
@@ -133,8 +134,9 @@ public sealed class MediaPipelineService
                 Directory.CreateDirectory(videoTranscodeDir);
             }
 
-            // Fetch metadata (title, channel, duration) via yt-dlp --dump-json.
+            if (!skipDownload)
             {
+                // Fetch metadata (title, channel, duration) via yt-dlp --dump-json.
                 onProgress?.Invoke(
                     new MediaPipelineProgress(
                         video.Url,
@@ -179,45 +181,55 @@ public sealed class MediaPipelineService
                         await ThumbnailDownloader.DownloadAsync(meta.ThumbnailUrl, thumbPath, cancellationToken);
                     }
                 }
-            }
 
-            if (!File.Exists(sourcePath))
-            {
+                if (!File.Exists(sourcePath))
+                {
+                    onProgress?.Invoke(
+                        new MediaPipelineProgress(
+                            video.Url,
+                            "Download",
+                            "Active",
+                            "Downloading source via yt-dlp.",
+                            10,
+                            PhasePercentage(downloadedCount, totalCount, 0.1, phaseStart: 0, phaseSpan: 35)));
+
+                    var sourceDirectory = Path.GetDirectoryName(sourcePath) ?? workingDirectory;
+                    var sourceStem = Path.GetFileNameWithoutExtension(sourcePath);
+                    if (string.IsNullOrWhiteSpace(sourceStem))
+                    {
+                        sourceStem = "video";
+                    }
+
+                    var ytdlpOutputTemplate = Path.Combine(sourceDirectory, $"{sourceStem}.%(ext)s");
+                    var downloadArgs = new List<string>
+                    {
+                        "--no-playlist",
+                        "--no-part",
+                        "--output",
+                        ytdlpOutputTemplate,
+                        video.Url,
+                    };
+
+                    var downloadResult = await _toolRunner.RunAsync(ytDlp, downloadArgs, workingDirectory, cancellationToken);
+                    if (downloadResult.ExitCode != 0)
+                    {
+                        return new MediaPipelineResult(
+                            false,
+                            $"yt-dlp failed for '{video.Title}' (exit {downloadResult.ExitCode}). {ExtractFailureReason(downloadResult)}",
+                            "Download",
+                            video.Url);
+                    }
+                }
+
+                downloadedCount++;
                 onProgress?.Invoke(
                     new MediaPipelineProgress(
                         video.Url,
                         "Download",
-                        "Active",
-                        "Downloading source via yt-dlp.",
-                        10,
-                        PhasePercentage(downloadedCount, totalCount, 0.1, phaseStart: 0, phaseSpan: 35)));
-
-                var sourceDirectory = Path.GetDirectoryName(sourcePath) ?? workingDirectory;
-                var sourceStem = Path.GetFileNameWithoutExtension(sourcePath);
-                if (string.IsNullOrWhiteSpace(sourceStem))
-                {
-                    sourceStem = "video";
-                }
-
-                var ytdlpOutputTemplate = Path.Combine(sourceDirectory, $"{sourceStem}.%(ext)s");
-                var downloadArgs = new List<string>
-                {
-                    "--no-playlist",
-                    "--no-part",
-                    "--output",
-                    ytdlpOutputTemplate,
-                    video.Url,
-                };
-
-                var downloadResult = await _toolRunner.RunAsync(ytDlp, downloadArgs, workingDirectory, cancellationToken);
-                if (downloadResult.ExitCode != 0)
-                {
-                    return new MediaPipelineResult(
-                        false,
-                        $"yt-dlp failed for '{video.Title}' (exit {downloadResult.ExitCode}). {ExtractFailureReason(downloadResult)}",
-                        "Download",
-                        video.Url);
-                }
+                        "Done",
+                        "Source media available.",
+                        35,
+                        PhasePercentage(downloadedCount, totalCount, 0, phaseStart: 0, phaseSpan: 35)));
             }
 
             sourcePath = ResolveSourcePath(sourcePath);
@@ -225,21 +237,14 @@ public sealed class MediaPipelineService
             {
                 return new MediaPipelineResult(
                     false,
-                    $"yt-dlp reported success for '{video.Title}', but no source file was found at or near '{video.SourcePath}'.",
+                    skipDownload
+                        ? $"Source file not found for '{video.Title}' at or near '{video.SourcePath}'. Download may be needed."
+                        : $"yt-dlp reported success for '{video.Title}', but no source file was found at or near '{video.SourcePath}'.",
                     "Download",
                     video.Url);
             }
 
-            downloadedCount++;
             resolvedSourcePaths[video] = sourcePath;
-            onProgress?.Invoke(
-                new MediaPipelineProgress(
-                    video.Url,
-                    "Download",
-                    "Done",
-                    "Source media available.",
-                    35,
-                    PhasePercentage(downloadedCount, totalCount, 0, phaseStart: 0, phaseSpan: 35)));
         }
 
         onProgress?.Invoke(

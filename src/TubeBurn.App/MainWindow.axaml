@@ -55,6 +55,23 @@
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="10,4" />
         </Style>
+        <!-- Stage row: redo button hidden by default, revealed on hover when redoable -->
+        <Style Selector="Border.stageRow Button.redoBtn">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="Border.stageRow.redoable:pointerover Button.redoBtn">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <Style Selector="Border.stageRow.redoable:pointerover TextBlock.stageState">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <!-- Stage row: retry button always visible when retryable -->
+        <Style Selector="Border.stageRow.retryable Button.redoBtn">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <Style Selector="Border.stageRow.retryable TextBlock.stageState">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
         <Style Selector="Button.primary">
             <Setter Property="Background" Value="#FF6A3D" />
             <Setter Property="Foreground" Value="White" />
@@ -377,7 +394,9 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="viewModels:PipelineStageItem">
                                             <StackPanel Margin="0,0,0,10">
-                                                <Border Classes="queueItem">
+                                                <Border Classes="queueItem stageRow"
+                                                        Classes.redoable="{Binding IsRedoable}"
+                                                        Classes.retryable="{Binding IsRetryAvailable}">
                                                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                                                         <Border Width="10" Height="10" CornerRadius="5" VerticalAlignment="Top"
                                                                 Background="{Binding AccentBrush}" />
@@ -385,13 +404,12 @@
                                                             <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                                                             <TextBlock Classes="muted" Text="{Binding Detail}" TextWrapping="Wrap" />
                                                         </StackPanel>
-                                                        <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding State}"
-                                                                   IsVisible="{Binding IsStateVisible}" />
-                                                        <Button Grid.Column="2" VerticalAlignment="Center"
-                                                                Classes="primary" Padding="12,6"
-                                                                Content="Retry Burn"
-                                                                IsVisible="{Binding IsRetryAvailable}"
-                                                                Click="OnRetryBurnClick" />
+                                                        <Panel Grid.Column="2" VerticalAlignment="Center">
+                                                            <TextBlock Classes="stageState" Text="{Binding State}" />
+                                                            <Button Classes="secondary redoBtn" Padding="10,5"
+                                                                    Content="{Binding RerunLabel}" Tag="{Binding}"
+                                                                    Click="OnRedoStageClick" />
+                                                        </Panel>
                                                     </Grid>
                                                 </Border>
                                                 <Button Classes="secondary" Padding="8,3" Margin="20,4,0,0"

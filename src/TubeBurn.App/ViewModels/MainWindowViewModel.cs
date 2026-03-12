@@ -227,7 +227,13 @@ public sealed class MainWindowViewModel : ObservableObject
     public bool BurnEnabled
     {
         get => _burnEnabled;
-        set => SetProperty(ref _burnEnabled, value);
+        set
+        {
+            if (SetProperty(ref _burnEnabled, value))
+            {
+                RefreshRerunStates();
+            }
+        }
     }
 
     public bool EjectAfterBurn
@@ -292,7 +298,13 @@ public sealed class MainWindowViewModel : ObservableObject
     public bool IsBusy
     {
         get => _isBusy;
-        set => SetProperty(ref _isBusy, value);
+        set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                RefreshRerunStates();
+            }
+        }
     }
 
     public ReadOnlyCollection<string> VideoStandards { get; }
@@ -1185,6 +1197,7 @@ public sealed class MainWindowViewModel : ObservableObject
             stage.IsRetryAvailable = false;
         }
 
+        RefreshRerunStates();
         RefreshCleanupStates();
     }
 
@@ -1243,6 +1256,72 @@ public sealed class MainWindowViewModel : ObservableObject
         }
 
         RefreshCleanupStates();
+    }
+
+    /// <summary>
+    /// Recalculates IsRedoable for each pipeline stage.
+    /// A stage is redoable when it is Done and all preceding stages are also Done.
+    /// A stage is retryable when it is in an error state and all preceding stages are Done.
+    /// Neither applies when any stage is Active (build in progress).
+    /// </summary>
+    private void RefreshRerunStates()
+    {
+        var anyActive = PipelineStages.Any(s => s.State == "Active");
+        var allPriorDone = true;
+
+        for (var i = 0; i < PipelineStages.Count; i++)
+        {
+            var stage = PipelineStages[i];
+
+            if (anyActive || IsBusy)
+            {
+                stage.IsRedoable = false;
+                // Keep existing IsRetryAvailable only for the burn retry during active build
+            }
+            else
+            {
+                var canRerun = allPriorDone && stage.State is "Done" or "Ready";
+                // Burn stage requires BurnEnabled toggle
+                if (stage.Name == "Burn" && !BurnEnabled)
+                    canRerun = false;
+
+                stage.IsRedoable = canRerun;
+
+                var isError = stage.State is "Needs attention" or "Blocked" or "Failed";
+                if (isError && allPriorDone && !(stage.Name == "Burn" && !BurnEnabled))
+                {
+                    stage.IsRetryAvailable = true;
+                }
+            }
+
+            if (stage.State is not "Done" and not "Ready")
+            {
+                allPriorDone = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resets this stage and all subsequent stages to Pending.
+    /// Called when the user triggers a redo/retry from a specific stage.
+    /// </summary>
+    public void ResetStagesFrom(string stageName)
+    {
+        var found = false;
+        foreach (var stage in PipelineStages)
+        {
+            if (string.Equals(stage.Name, stageName, StringComparison.OrdinalIgnoreCase))
+            {
+                found = true;
+            }
+
+            if (found)
+            {
+                SetStage(stage.Name, "Pending");
+                stage.IsRedoable = false;
+                stage.IsRetryAvailable = false;
+            }
+        }
     }
 
     private void SetStageRetryAvailable(string stageName, bool available)
@@ -1735,6 +1814,7 @@ public sealed class PipelineStageItem : ObservableObject
     private IBrush _accentBrush;
     private bool _isRetryAvailable;
     private bool _isCleanupEnabled;
+    private bool _isRedoable;
 
     public PipelineStageItem(string name, string detail, string state, IBrush accentBrush, string? cleanupFolder = null)
     {
@@ -1764,6 +1844,7 @@ public sealed class PipelineStageItem : ObservableObject
             if (SetProperty(ref _state, value))
             {
                 OnPropertyChanged(nameof(IsStateVisible));
+                OnPropertyChanged(nameof(RerunLabel));
             }
         }
     }
@@ -1774,6 +1855,20 @@ public sealed class PipelineStageItem : ObservableObject
         set => SetProperty(ref _accentBrush, value);
     }
 
+    /// <summary>
+    /// True when the stage completed successfully and all prior stages are also Done.
+    /// The UI shows a "Redo" button on hover when this is true.
+    /// </summary>
+    public bool IsRedoable
+    {
+        get => _isRedoable;
+        set => SetProperty(ref _isRedoable, value);
+    }
+
+    /// <summary>
+    /// True when the stage failed and all prior stages are Done.
+    /// The UI shows a "Retry" button (always visible, not just on hover).
+    /// </summary>
     public bool IsRetryAvailable
     {
         get => _isRetryAvailable;
@@ -1782,9 +1877,12 @@ public sealed class PipelineStageItem : ObservableObject
             if (SetProperty(ref _isRetryAvailable, value))
             {
                 OnPropertyChanged(nameof(IsStateVisible));
+                OnPropertyChanged(nameof(RerunLabel));
             }
         }
     }
+
+    public string RerunLabel => IsRetryAvailable ? "Retry" : State == "Ready" ? "Go" : "Redo";
 
     public bool IsCleanupEnabled
     {

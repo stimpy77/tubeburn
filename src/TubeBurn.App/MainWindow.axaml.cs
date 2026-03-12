@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private string? _pendingBurnRetryWorkingDirectory;
     private string? _pendingBurnRetrySignature;
     private CancellationTokenSource? _buildCts;
+    private string? _redoStartStage;
 
     public MainWindow()
     {
@@ -689,7 +690,196 @@ public partial class MainWindow : Window
         return $"{settingsSignature}::{videoSignature}";
     }
 
-    private void OnRetryBurnClick(object? sender, RoutedEventArgs e) => OnBuildAndBurnClick(sender, e);
+    private async void OnRedoStageClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: PipelineStageItem stage })
+            return;
+
+        if (stage.Name == "Burn" && !ViewModel.BurnEnabled)
+        {
+            ViewModel.BuildStatus = "Enable 'Burn Disc' toggle first.";
+            return;
+        }
+
+        // Re-snapshot project with current UI settings (picks up any changes)
+        var project = ViewModel.BuildProject();
+        var tools = _toolDiscoveryService.Discover(project.Settings);
+        ViewModel.SetToolStatuses(tools);
+
+        // Reset this stage and everything after it
+        _redoStartStage = stage.Name;
+        ViewModel.ResetStagesFrom(stage.Name);
+        ViewModel.IsBusy = true;
+        ViewModel.BuildStatus = $"Re-running from {stage.Name}...";
+        ViewModel.AddRecentActivity($"Redo triggered from {stage.Name} stage (settings refreshed).");
+
+        _buildCts?.Dispose();
+        _buildCts = new CancellationTokenSource();
+        var cancellationToken = _buildCts.Token;
+
+        try
+        {
+            await ExecuteFromStageAsync(stage.Name, project, tools, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            ViewModel.EndBusy("Build stopped by user.");
+            AppLog.Info("Build stopped by user.");
+        }
+        catch (Exception ex)
+        {
+            ViewModel.EndBusy($"Build failed: {ex.Message}");
+            AppLog.Error("Redo build flow threw an exception.", ex);
+        }
+        finally
+        {
+            _redoStartStage = null;
+            _buildCts?.Dispose();
+            _buildCts = null;
+        }
+    }
+
+    private async Task ExecuteFromStageAsync(
+        string startStage, TubeBurnProject project,
+        IReadOnlyList<ToolAvailability> toolStatuses, CancellationToken cancellationToken)
+    {
+        var stageOrder = new[] { "Download", "Transcode", "Author", "Burn" };
+        var startIndex = Array.IndexOf(stageOrder, startStage);
+        if (startIndex < 0)
+            return;
+
+        // Determine or create working directory
+        var workingDirectory = ViewModel.LastAuthoredWorkingDirectory;
+        if (string.IsNullOrEmpty(workingDirectory) || startIndex < 2)
+        {
+            // For Download/Transcode redo we need a fresh working directory for authoring later
+            workingDirectory = Path.Combine(
+                project.Settings.OutputDirectory,
+                ".tubeburn",
+                DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            Directory.CreateDirectory(workingDirectory);
+        }
+
+        await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
+
+        // Download / Transcode (media pipeline handles both)
+        if (startIndex <= 1)
+        {
+            var canRunMediaPipeline = toolStatuses
+                .Where(tool => tool.ToolName is "yt-dlp" or "ffmpeg")
+                .All(tool => tool.IsAvailable);
+
+            if (canRunMediaPipeline)
+            {
+                // If redoing transcode only, delete the transcode manifest so files get re-encoded
+                if (startIndex == 1)
+                {
+                    var manifestPath = Path.Combine(project.Settings.OutputDirectory, "transcoded", "manifest.json");
+                    if (File.Exists(manifestPath))
+                        File.Delete(manifestPath);
+                }
+
+                var transcodeOnly = startIndex == 1;
+                AppLog.Info($"Media pipeline starting (from {startStage}, skipDownload={transcodeOnly}).");
+                var mediaResult = await _mediaPipelineService.ExecuteAsync(
+                    project,
+                    workingDirectory,
+                    progress => Dispatcher.UIThread.Post(() => ApplyMediaProgress(progress)),
+                    cancellationToken,
+                    skipDownload: transcodeOnly);
+
+                if (!mediaResult.Succeeded)
+                {
+                    ViewModel.MarkMediaPreparationFailed(mediaResult.FailedStage ?? "Download", mediaResult.Summary, mediaResult.FailedUrl);
+                    AppLog.Warn($"Media pipeline failed: {mediaResult.Summary}");
+                    return;
+                }
+
+                AppLog.Info("Media pipeline completed.");
+            }
+            else
+            {
+                var missingMedia = project.Videos
+                    .Where(v => !File.Exists(v.SourcePath) || !File.Exists(v.TranscodedPath))
+                    .Select(v => v.Title)
+                    .ToList();
+
+                if (missingMedia.Count > 0)
+                {
+                    ViewModel.MarkMediaPreparationFailed("Download",
+                        $"yt-dlp/ffmpeg unavailable and media missing for: {string.Join(", ", missingMedia)}", null);
+                    return;
+                }
+
+                ViewModel.NoteMediaPreparationSkipped("Using existing media (yt-dlp/ffmpeg unavailable).");
+            }
+
+            // Re-check disc capacity with actual file sizes
+            ViewModel.RefreshEstimatedSizesFromDisk();
+            project = ViewModel.BuildProject();
+            var capacityBytes = project.Settings.MediaKind == DiscMediaKind.Dvd9 ? 8_540_000_000L : 4_700_000_000L;
+            var discLabel = project.Settings.MediaKind == DiscMediaKind.Dvd9 ? "DVD-9" : "DVD-5";
+            var actualBytes = project.Channels.SelectMany(ch => ch.Videos).Sum(v => v.EstimatedSizeBytes);
+            if (actualBytes > capacityBytes)
+            {
+                ViewModel.MarkOverCapacityBlocked(actualBytes, capacityBytes, discLabel);
+                return;
+            }
+
+            await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
+        }
+
+        // Author
+        if (startIndex <= 2)
+        {
+            // If redoing author, use a fresh working directory
+            if (startIndex == 2)
+            {
+                workingDirectory = Path.Combine(
+                    project.Settings.OutputDirectory,
+                    ".tubeburn",
+                    DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                Directory.CreateDirectory(workingDirectory);
+                await _projectFileService.SaveAsync(project, Path.Combine(workingDirectory, "project-state.json"));
+            }
+
+            ViewModel.MarkAuthoringStarted();
+            AppLog.Info("Authoring started.");
+
+            var canRunExternal = toolStatuses
+                .Where(tool => tool.ToolName is "dvdauthor" or "mkisofs")
+                .All(tool => tool.IsAvailable);
+            if (project.Settings.PreferExternalAuthoring && !canRunExternal)
+            {
+                project = project with
+                {
+                    Settings = project.Settings with { PreferExternalAuthoring = false },
+                };
+            }
+
+            var backend = _backendSelector.Select(project.Settings);
+            var result = await backend.AuthorAsync(new DvdBuildRequest(project, workingDirectory), cancellationToken);
+            ViewModel.ApplyBuildResult(result, workingDirectory);
+
+            if (result.Status is AuthoringResultStatus.Failed or AuthoringResultStatus.Planned)
+            {
+                AppLog.Warn($"Authoring incomplete ({result.Backend}, {result.Status}): {result.Summary}");
+                return;
+            }
+
+            AppLog.Info($"Authoring completed ({result.Backend}, {result.Status}): {result.Summary}");
+        }
+
+        // Burn
+        if (startIndex <= 3 && ViewModel.BurnEnabled)
+        {
+            await ExecuteBurnStageAsync(project, workingDirectory, markBurnStageStarted: true);
+        }
+        else if (startIndex <= 3)
+        {
+            ViewModel.EndBusy("Build completed. Burn skipped (toggle is off).");
+        }
+    }
 
     private void OnCleanupStageClick(object? sender, RoutedEventArgs e)
     {
@@ -1087,9 +1277,20 @@ public partial class MainWindow : Window
 
     private void ApplyMediaProgress(MediaPipelineProgress progress)
     {
+        // When redoing from Transcode, don't let Download callbacks overwrite the already-Done state.
+        var skipDownloadStageUpdates = string.Equals(_redoStartStage, "Transcode", StringComparison.OrdinalIgnoreCase);
+
         if (progress.Stage is "Download")
         {
-            if (progress.Status is "Active")
+            if (skipDownloadStageUpdates)
+            {
+                // Download is already Done; only apply Transcode Active when downloads finish.
+                if (progress.Status is "Done" && string.IsNullOrWhiteSpace(progress.Url))
+                {
+                    ViewModel.SetPipelineStageState("Transcode", "Active");
+                }
+            }
+            else if (progress.Status is "Active")
             {
                 ViewModel.SetPipelineStageState("Download", "Active");
             }

@@ -325,10 +325,22 @@ public sealed class DiscBurnService
             }
             catch (COMException comEx)
             {
+                // USB DVD drives commonly do a bus reset during finalization (lead-out /
+                // session close), which IMAPI surfaces as a COMException even though the
+                // burn completed successfully.  Wait for the drive to settle and check
+                // if the disc is actually readable before declaring failure.
+                var verifyResult = VerifyDiscAfterError(recorder);
+                if (verifyResult is not null)
+                    return verifyResult;
+
                 return new DiscBurnResult(DiscBurnOutcome.Failed, $"Windows native burn failed (COM {comEx.ErrorCode:X8}): {comEx.Message}");
             }
             catch (Exception ex)
             {
+                var verifyResult = VerifyDiscAfterError(recorder);
+                if (verifyResult is not null)
+                    return verifyResult;
+
                 return new DiscBurnResult(DiscBurnOutcome.Failed, $"Windows native burn failed: {ex.Message}");
             }
             finally
@@ -538,6 +550,49 @@ public sealed class DiscBurnService
         }
         // Proceed anyway after timeout — the subsequent media-support check
         // will produce a clear error if the drive truly isn't ready.
+    }
+
+    /// <summary>
+    /// After a burn error (typically a USB bus reset during finalization), wait for
+    /// the drive to settle and check whether the disc was actually written successfully.
+    /// Returns a Succeeded result if VIDEO_TS is found on the disc, or null if verification
+    /// fails (caller should report the original error).
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static DiscBurnResult? VerifyDiscAfterError(dynamic recorder)
+    {
+        // Give the USB drive time to complete finalization and remount.
+        // Poll for up to 60 seconds with increasing back-off.
+        var elapsed = 0;
+        var interval = 2;
+        while (elapsed < 60)
+        {
+            Thread.Sleep(interval * 1000);
+            elapsed += interval;
+            interval = Math.Min(interval + 1, 5);
+
+            try
+            {
+                var paths = ReadVolumePathNames((object)recorder).ToList();
+                foreach (var mountPath in paths)
+                {
+                    var videoTs = Path.Combine(mountPath, "VIDEO_TS");
+                    if (Directory.Exists(videoTs))
+                    {
+                        return new DiscBurnResult(
+                            DiscBurnOutcome.Succeeded,
+                            "Burn completed (drive reset during finalization but disc verified OK).",
+                            "IMAPI2 native burn (verified after bus reset)");
+                    }
+                }
+            }
+            catch
+            {
+                // Drive still resetting — keep polling.
+            }
+        }
+
+        return null;
     }
 
     private static string? TryDescribeCurrentMediaSupport(dynamic dataWriter, dynamic recorder)
