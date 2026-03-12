@@ -144,8 +144,9 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         var allVtsIfos = new List<byte[]>();
         var titlesPerVts = new List<int>();
         var chaptersPerTitle = new List<int>();
-        // TEMP: keep menu navigation on multi-title topology for player reliability.
-        // Chapter-mode menu jumps (JumpVtsPtt) are currently not activating reliably in VLC.
+        // Multi-title topology: each video is its own PGC/title, JumpVtsTt button commands.
+        // PlayNextVideo behavior is handled by LinkPGCN post-commands in WriteMultiTitlePgcs.
+        // Multi-chapter topology (JumpVtsPtt) is avoided — VLC doesn't activate it from VTSM domain.
         var useChapters = false;
 
         // Process each channel as a separate VTS
@@ -220,7 +221,7 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 menuPages: videoMenuPages.Count > 0 ? videoMenuPages : null,
                 menuVobSizeBytes: menuVobSize,
                 endOfVideoAction: project.Settings.EndOfVideoAction,
-                nextChapterAction: useChapters ? project.Settings.NextChapterAction : TitleEndBehavior.GoToMenu,
+                nextChapterAction: useChapters ? TitleEndBehavior.PlayNextVideo : TitleEndBehavior.GoToMenu,
                 menuPageSectorOffsets: menuPageSectorOffsets.Count > 0 ? menuPageSectorOffsets : null,
                 aspectRatio: channelAspect);
 

@@ -361,7 +361,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
 
         var project = new TubeBurnProject(
             "Test Project",
-            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir),
+            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir, EndOfVideoAction: TitleEndBehavior.GoToMenu),
             [
                 new ChannelProject("TestChannel", "", "",
                 [
@@ -434,7 +434,8 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     /// Skips test (returns null) if ffmpeg is unavailable.
     /// </summary>
     private async Task<(string videoTs, byte[] vtsIfo, byte[] vmgIfo)?> AuthorSingleChannelMenuDvd(
-        int videoCount = 2)
+        int videoCount = 2,
+        TitleEndBehavior endOfVideoAction = TitleEndBehavior.GoToMenu)
     {
         var ffmpegResolution = TubeBurn.Infrastructure.ExternalToolPathResolver.Resolve("ffmpeg", null);
         if (!ffmpegResolution.IsAvailable)
@@ -452,7 +453,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
 
         var project = new TubeBurnProject(
             "Menu Test",
-            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir),
+            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir, EndOfVideoAction: endOfVideoAction),
             [new ChannelProject("TestChannel", "", "", videos)]);
 
         var pipeline = new NativeAuthoringPipeline();
@@ -497,7 +498,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
 
         var project = new TubeBurnProject(
             "Multi-Channel Menu Test",
-            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir),
+            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir, EndOfVideoAction: TitleEndBehavior.GoToMenu),
             channels);
 
         var pipeline = new NativeAuthoringPipeline();
@@ -772,8 +773,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     [Fact]
     public async Task MenuBinary_single_channel_multi_chapter_structure()
     {
-        // Pipeline currently uses multi-title topology (useChapters=false).
-        // 2 PGCs with 1 program/cell each, post-commands return to menu.
+        // GoToMenu topology: 2 PGCs, 1 program/cell each, post-commands return to menu.
         var authored = await AuthorSingleChannelMenuDvd();
         if (authored is null) return;
         var (videoTs, vtsIfo, vmgIfo) = authored.Value;
@@ -799,6 +799,39 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
             Assert.Equal(0x08, vtsIfo[postCmdAbs + 1]);
             Assert.Equal(0x83, vtsIfo[postCmdAbs + 5]);
         }
+    }
+
+    [Fact]
+    public async Task MenuBinary_play_next_video_chains_pgcs_with_link()
+    {
+        // PlayNextVideo: multi-title topology with LinkPGCN post-commands.
+        // PGC 1 → LinkPGCN(2), PGC 2 → CallSS VTSM (last video returns to menu).
+        var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
+        if (authored is null) return;
+        var (videoTs, vtsIfo, vmgIfo) = authored.Value;
+
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
+        Assert.Equal(2, pgcCount); // 2 PGCs (multi-title)
+
+        // PGC 1: post-command = LinkPGCN(2)
+        var pgc1Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 4));
+        var pgc1Abs = pgcitBase + (int)pgc1Off;
+        var cmd1Off = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc1Abs + 0xE4));
+        var post1Abs = pgc1Abs + cmd1Off + 8;
+        Assert.Equal(0x20, vtsIfo[post1Abs]);     // LinkPGCN opcode
+        Assert.Equal(0x04, vtsIfo[post1Abs + 1]);
+        Assert.Equal(2, vtsIfo[post1Abs + 7]);    // target PGC = 2
+
+        // PGC 2: post-command = CallSS VTSM root (return to menu)
+        var pgc2Off = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + 8 + 4));
+        var pgc2Abs = pgcitBase + (int)pgc2Off;
+        var cmd2Off = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc2Abs + 0xE4));
+        var post2Abs = pgc2Abs + cmd2Off + 8;
+        Assert.Equal(0x30, vtsIfo[post2Abs]);     // CallSS opcode
+        Assert.Equal(0x08, vtsIfo[post2Abs + 1]);
+        Assert.Equal(0x83, vtsIfo[post2Abs + 5]); // VTSM root
     }
 
     [Fact]
@@ -1147,7 +1180,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         Directory.CreateDirectory(_workDir);
         var project = new TubeBurnProject(
             "VLC Test",
-            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir),
+            new ProjectSettings(VideoStandard.Ntsc, DiscMediaKind.Dvd5, 8, _workDir, EndOfVideoAction: TitleEndBehavior.GoToMenu),
             [
                 new ChannelProject("TestChannel", "", "",
                 [

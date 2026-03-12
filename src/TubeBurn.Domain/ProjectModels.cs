@@ -44,7 +44,7 @@ public sealed record ProjectSettings(
     string FontFamily = "Open Sans SemiCondensed",
     int FontSize = 24,
     string MenuTitle = "Select Channel",
-    TitleEndBehavior EndOfVideoAction = TitleEndBehavior.GoToMenu,
+    TitleEndBehavior EndOfVideoAction = TitleEndBehavior.PlayNextVideo,
     TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo,
     bool NormalizeResolution = false,
     bool NormalizeVignette = true);

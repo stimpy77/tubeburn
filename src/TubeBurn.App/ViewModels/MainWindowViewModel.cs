@@ -41,7 +41,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _selectedBurnDrive = AutoBurnDriveLabel;
     private bool _burnEnabled = true;
     private bool _ejectAfterBurn = true;
-    private bool _endOfVideoGoToMenu = true;   // default: end of video → go to menu
+    private bool _endOfVideoGoToMenu = false;   // default: end of video → play next video
     private bool _nextChapterPlayNext = true;   // default: >>| → play next video
     private string _lastAuthoredWorkingDirectory = string.Empty;
     private string _lastFailureDetail = string.Empty;
