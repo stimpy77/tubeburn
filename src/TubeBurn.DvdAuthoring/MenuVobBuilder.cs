@@ -222,14 +222,15 @@ public static class MenuVobBuilder
         // Selected: pixel 0 = transparent, pixel 1 = white border (no fill)
         // Action: pixel 0 = transparent, pixel 1 = white border
         var coliBase = 0xA3;
-        // Group 0 (btn_coln=1): selection — white border only, no background fill
-        Write32(buf, coliBase, 0x001000F0);      // SL: color1=1,color0=0, alpha1=F,alpha0=0
-        Write32(buf, coliBase + 4, 0x001000F0);   // AC: same (white border, transparent bg)
+        // Group 0 (btn_coln=1): selection — white border + subtle white fill highlight
+        // color0=1 (white fill), color1=1 (white border), alpha0=2 (~15% fill), alpha1=F (opaque border)
+        Write32(buf, coliBase, 0x001100F2);      // SL: white border + ~15% white fill
+        Write32(buf, coliBase + 4, 0x001100F3);   // AC: white border + ~20% white fill (press flash)
         // Groups 1-2 (unused but fill with same values for safety)
-        Write32(buf, coliBase + 8, 0x001000F0);
-        Write32(buf, coliBase + 12, 0x001000F0);
-        Write32(buf, coliBase + 16, 0x001000F0);
-        Write32(buf, coliBase + 20, 0x001000F0);
+        Write32(buf, coliBase + 8, 0x001100F2);
+        Write32(buf, coliBase + 12, 0x001100F3);
+        Write32(buf, coliBase + 16, 0x001100F2);
+        Write32(buf, coliBase + 20, 0x001100F3);
 
         // BTNI entries at 0xBB (18 bytes each)
         // Layout per dvdauthor dvdvob.c (confirmed against DVD spec):
@@ -307,6 +308,7 @@ public static class MenuVobBuilder
             DvdButtonCommandKind.JumpVtsPtt => new JumpVtsPttCommand(1, (ushort)command.Target),
             DvdButtonCommandKind.JumpSsVtsm => new JumpSsVtsmCommand((byte)command.Target),
             DvdButtonCommandKind.JumpSsVmgm => new JumpSsVmgmCommand(),
+            DvdButtonCommandKind.CallSsVmgm => new CallSsVmgmCommand((byte)command.Target),
             DvdButtonCommandKind.LinkPgcn => new LinkPgcnCommand((ushort)command.Target),
             _ => new ExitCommand(),
         };

@@ -115,8 +115,9 @@ public sealed class MenuHighlightPlanner
                 navButtons.Add(($"prev-{pageNumber}", "< Prev",
                     new DvdButtonCommand(DvdButtonCommandKind.LinkPgcn, pageNumber - 1)));
 
-            // Multi-channel: Back returns to VMGM channel-select menu
-            // Single-channel: no Back button (no parent menu, Exit asserts VTSTitle domain)
+            // Multi-channel: Back returns to VMGM channel-select menu.
+            // JumpSS VMGM — valid from any domain (VTSM, VTSTitle, etc.)
+            // Single-channel: no Back button (no parent menu)
             if (isMultiChannel)
             {
                 navButtons.Add(($"back-{pageNumber}", "Back",

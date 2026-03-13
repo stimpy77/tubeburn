@@ -143,6 +143,7 @@ public enum DvdButtonCommandKind
     JumpVtsPtt,
     JumpSsVtsm,
     JumpSsVmgm,
+    CallSsVmgm,
     LinkPgcn,
     Exit,
 }

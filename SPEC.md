@@ -449,7 +449,7 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 
 ## Phases
 
-### Phase 1 — Working disc with auto-play, no menus (current)
+### Phase 1 — Working disc with auto-play, no menus (done)
 1. Dashboard UX: URL queue, save/load, tool discovery, one-click build orchestration
 2. Single VTS, one PGC per video (multi-PGC), chained for sequential auto-play
 3. Native authoring generates VIDEO_TS + ISO; external bridge available as fallback
@@ -462,22 +462,28 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 10. Stop button to cancel running build/burn process (CancellationToken propagation)
 11. Progressive disc usage updates as each transcode completes
 
-### Phase 2+3 — DVD Menu System (implemented)
+### Phase 2+3 — DVD Menu System (done)
 1. Level 2 menus: video select within each channel (VTSM menu PGCs)
 2. Level 1 menu: channel select for multi-channel projects (VMGM menu PGC)
-3. Full-width stacked row layout (not grid) — reserves space for future thumbnail/avatar images
-4. Still-image backgrounds via ffmpeg drawtext (MVP); SkiaSharp rendering planned for thumbnail compositing
+3. Full-width stacked row layout (not grid) with thumbnail/avatar images
+4. SkiaSharp menu rendering with channel avatars, video thumbnails, and banner backgrounds
 5. Button highlight subpictures (2-bit RLE, DVD player color overrides for states)
 6. Post-playback return to menu via `CallSS VTSM ROOT`
 7. Each channel = its own VTS, with separate VTSM and title PGCs
 8. Pagination via `LinkPgcn` between menu PGCs
 9. `MenuBackgroundRenderCallback` delegate decouples background rendering from authoring engine
 10. `MenuBackgroundRenderCallback` wired in `AuthoringBackendSelector` when ffmpeg is available — menus activate automatically
-11. **Planned subphases**:
-    - Thumbnail compositing: channel avatar (circle-cropped) left of channel name on Level 1, video thumbnail (square) left of title on Level 2
-    - Menu preview in GUI
+11. End-of-video behavior toggle: play next video (`LinkPGCN` chaining with `STC_discontinuity`) or return to menu (`CallSS VTSM ROOT`)
+12. Multi-chapter and multi-title DVD topologies with correct hardware player playback
 
-### Phase 4 — Polish
+### Phase 4a — SkiaSharp Menu Rendering (done)
+1. SkiaSharp 3.x replaces ffmpeg drawtext for menu backgrounds (fixes Windows fontconfig issues)
+2. Two visual designs: Level 1 (white bg, circle avatars, dark text) / Level 2 (dark bg, banner background, thumbnails, white text)
+3. Channel image downloads (avatars, banners, thumbnails) integrated into pipeline
+4. Font picker UI with configurable font family/size
+5. Live menu preview panel in GUI
+
+### Phase 4b — Polish (current)
 1. Animated menu backgrounds (short video loops)
 2. Custom themes/templates
 3. Chapter markers (split long videos into chapters within a program)
@@ -486,7 +492,7 @@ Tool discovery: `ExternalToolPathResolver` checks configured path → OS default
 ### Phase 5 — Native authoring parity
 1. Native authoring as default backend (external bridge for debugging only)
 2. Full parity with `reference/dvdauthor` on golden sample projects
-3. Native UDF 1.02 filesystem writer (replace IMAPI2 dependency)
+3. Replace IMAPI2 ISO builder with mkisofs/genisoimage using `-dvd-video` flag (ensures correct file ordering and contiguity required by DVD-Video spec; IMAPI2FS sorts alphabetically which breaks VOB sector layout)
 
 ## Acceptance Criteria (MVP Phase 1)
 
