@@ -82,27 +82,32 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         var vobFileSizes = new List<long>();
         var vobDurationsPts = new List<long>();
         var allVobuSectorOffsets = new List<IReadOnlyList<int>>();
-        var vobIndex = 1;
+        var tempVobPaths = new List<string>();
+        var tempWorkDir = Path.Combine(request.WorkingDirectory, "vob-work");
+        Directory.CreateDirectory(tempWorkDir);
         var nextStartSector = 0;
 
-        foreach (var video in request.Project.Videos)
+        for (var vi = 0; vi < request.Project.Videos.Count; vi++)
         {
+            var video = request.Project.Videos[vi];
             if (!File.Exists(video.TranscodedPath))
             {
                 return FailedResult($"Missing transcoded file: {video.TranscodedPath}", planPath, videoTsDirectory);
             }
 
-            var targetVobPath = Path.Combine(videoTsDirectory, $"VTS_01_{vobIndex}.VOB");
+            var tempVobPath = Path.Combine(tempWorkDir, $"VTS_01_title_{vi}.tmp");
             var muxResult = await DvdVobMuxer.MuxAsync(
-                video.TranscodedPath, targetVobPath,
-                vobId: vobIndex, cellId: 1, standard, cancellationToken,
+                video.TranscodedPath, tempVobPath,
+                vobId: vi + 1, cellId: 1, standard, cancellationToken,
                 startSector: nextStartSector);
             vobFileSizes.Add(muxResult.FileSizeBytes);
             vobDurationsPts.Add(muxResult.DurationPts);
             allVobuSectorOffsets.Add(muxResult.VobuSectorOffsets);
+            tempVobPaths.Add(tempVobPath);
             nextStartSector += (int)(muxResult.FileSizeBytes / 2048);
-            vobIndex++;
         }
+
+        await ConcatenateTitleVobs(tempVobPaths, videoTsDirectory, "VTS_01", cancellationToken);
 
         var channelAspect = request.Project.Videos.FirstOrDefault()?.AspectRatio ?? DvdAspectRatio.Wide16x9;
         var vtsIfo = DvdIfoWriter.WriteVtsIfo(standard, vobFileSizes, vobDurationsPts, allVobuSectorOffsets,
@@ -188,31 +193,38 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
                 }
             }
 
-            // Mux title VOBs
+            // Mux title VOBs into temp files, then concatenate into proper DVD VOBs.
+            // DVD spec: title VOBs are a single logical stream split at 1 GiB into
+            // VTS_xx_1.VOB through VTS_xx_9.VOB. One file per video breaks playback
+            // because ISO builders order files alphabetically (10 before 2) and
+            // libdvdread only opens files numbered 1-9.
             var vobFileSizes = new List<long>();
             var vobDurationsPts = new List<long>();
             var allVobuSectorOffsets = new List<IReadOnlyList<int>>();
-            var vobFileIndex = 1;
+            var tempVobPaths = new List<string>();
             var nextStartSector = 0;
 
-            foreach (var video in channel.Videos)
+            for (var vi = 0; vi < channel.Videos.Count; vi++)
             {
+                var video = channel.Videos[vi];
                 if (!File.Exists(video.TranscodedPath))
                 {
                     return FailedResult($"Missing transcoded file: {video.TranscodedPath}", planPath, videoTsDirectory);
                 }
 
-                var targetVobPath = Path.Combine(videoTsDirectory, $"{vtsTag}_{vobFileIndex}.VOB");
+                var tempVobPath = Path.Combine(menuWorkDir, $"{vtsTag}_title_{vi}.tmp");
                 var muxResult = await DvdVobMuxer.MuxAsync(
-                    video.TranscodedPath, targetVobPath,
-                    vobId: vobFileIndex, cellId: 1, standard, cancellationToken,
+                    video.TranscodedPath, tempVobPath,
+                    vobId: vi + 1, cellId: 1, standard, cancellationToken,
                     startSector: nextStartSector);
                 vobFileSizes.Add(muxResult.FileSizeBytes);
                 vobDurationsPts.Add(muxResult.DurationPts);
                 allVobuSectorOffsets.Add(muxResult.VobuSectorOffsets);
+                tempVobPaths.Add(tempVobPath);
                 nextStartSector += (int)(muxResult.FileSizeBytes / 2048);
-                vobFileIndex++;
             }
+
+            await ConcatenateTitleVobs(tempVobPaths, videoTsDirectory, vtsTag, cancellationToken);
 
             // Write VTS IFO with menu support — aspect ratio from channel's videos
             var channelAspect = channel.Videos.FirstOrDefault()?.AspectRatio ?? DvdAspectRatio.Wide16x9;
@@ -291,6 +303,58 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             "Native authoring with DVD menus generated VIDEO_TS and ISO artifacts.",
             [planPath, videoTsDirectory, isoPath],
             []);
+    }
+
+    /// <summary>
+    /// Concatenates per-video temp VOB files into proper DVD title VOBs.
+    /// DVD spec: title VOBs are a single logical stream named VTS_xx_1.VOB through
+    /// VTS_xx_9.VOB, split at 1 GiB boundaries. Max ~9 GiB of title data per VTS.
+    /// </summary>
+    private static async Task ConcatenateTitleVobs(
+        List<string> tempVobPaths, string videoTsDirectory, string vtsTag,
+        CancellationToken cancellationToken)
+    {
+        const long maxVobFileSize = 1_073_741_824; // 1 GiB per DVD spec
+        const int maxVobFiles = 9; // VTS_xx_1.VOB through VTS_xx_9.VOB
+
+        var vobFileNumber = 1;
+        var currentPath = Path.Combine(videoTsDirectory, $"{vtsTag}_{vobFileNumber}.VOB");
+        var currentStream = new FileStream(currentPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+        long currentFileSize = 0;
+
+        try
+        {
+            foreach (var tempPath in tempVobPaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var tempSize = new FileInfo(tempPath).Length;
+
+                // Split to next VOB file if adding this video would exceed 1 GiB
+                if (currentFileSize > 0 && currentFileSize + tempSize > maxVobFileSize)
+                {
+                    await currentStream.DisposeAsync();
+                    vobFileNumber++;
+                    if (vobFileNumber > maxVobFiles)
+                        throw new InvalidOperationException(
+                            $"Title VOB data exceeds DVD maximum (~{maxVobFiles} GiB). Reduce video count or bitrate.");
+                    currentPath = Path.Combine(videoTsDirectory, $"{vtsTag}_{vobFileNumber}.VOB");
+                    currentStream = new FileStream(currentPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                    currentFileSize = 0;
+                }
+
+                {
+                    await using var src = new FileStream(tempPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+                    await src.CopyToAsync(currentStream, cancellationToken);
+                    currentFileSize += tempSize;
+                }
+
+                File.Delete(tempPath);
+            }
+        }
+        finally
+        {
+            await currentStream.DisposeAsync();
+        }
     }
 
     private AuthoringResult FailedResult(string message, string planPath, string videoTsDir)

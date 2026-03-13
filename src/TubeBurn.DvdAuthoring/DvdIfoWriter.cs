@@ -398,7 +398,7 @@ public static class DvdIfoWriter
         for (var i = 0; i < pgcCount; i++)
         {
             var srp = pgcit.Slice(8 + i * 8, 8);
-            srp[0] = (byte)(0x81 + i);
+            srp[0] = 0x80; // entry PGC (bit 7), no block/parental flags
             Write32(srp, 4, (uint)(pgcDataOffset + i * pgcLen));
         }
 
@@ -522,6 +522,7 @@ public static class DvdIfoWriter
         for (var c = 0; c < videoCount; c++)
         {
             var cell = pgc.Slice(cpbOff + c * 24, 24);
+            cell[0] = 0x02; // STC_discontinuity: each cell is a separately-muxed VOB with its own SCR timeline
             if (nCellCmds > 0)
                 cell[3] = (byte)(c + 1); // cell_cmd_nr (1-based)
 
@@ -625,6 +626,7 @@ public static class DvdIfoWriter
             pgc[mapOff] = 1;
 
             var c = pgc.Slice(cpbOff, 24);
+            c[0] = 0x02; // STC_discontinuity: each PGC plays a different VOB with its own SCR timeline
             WriteBcdTime(c[4..], durationSeconds, fps, fpsFlag);
             var lastSector = (uint)(vobStart[i] + vobSectors[i] - 1);
             Write32(c, 8, (uint)vobStart[i]);

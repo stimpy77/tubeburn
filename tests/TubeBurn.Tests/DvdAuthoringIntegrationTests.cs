@@ -384,7 +384,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(videoTs, "VIDEO_TS.IFO")));
         Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_0.IFO")));
         Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_1.VOB")));
-        Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_2.VOB")));
+        // All title VOBs concatenated into VTS_01_1.VOB (no separate VTS_01_2.VOB)
 
         // Validate IFO: no zero_1 violations.
         var vtsIfo = await File.ReadAllBytesAsync(Path.Combine(videoTs, "VTS_01_0.IFO"));
@@ -404,11 +404,11 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
             Assert.Equal(0, zero1);
         }
 
-        // Validate VOBs: first sector of each is a proper NAV pack.
-        foreach (var vobFile in new[] { "VTS_01_1.VOB", "VTS_01_2.VOB" })
+        // Validate concatenated VOB: first sector is a proper NAV pack.
+        var vobPath = Path.Combine(videoTs, "VTS_01_1.VOB");
         {
             var vob = new byte[2048];
-            await using var fs = File.OpenRead(Path.Combine(videoTs, vobFile));
+            await using var fs = File.OpenRead(vobPath);
             await fs.ReadExactlyAsync(vob);
 
             Assert.Equal(0xBA, vob[3]);   // pack header
@@ -417,14 +417,22 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
             Assert.Equal(0xBF, vob[0x403]); // DSI
         }
 
-        // Validate VOB 2 has non-zero LBN (global sector offset from VOB 1).
+        // Validate video 2's NAV pack has non-zero LBN (within concatenated VOB).
+        // Read cell 2's first_sector from cell playback in PGC 2.
+        var srp1Off = pgcitBase + 8 + 1 * 8; // PGC SRP for title 2
+        var pgc2Off = pgcitBase + (int)BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(srp1Off + 4));
+        var cpbOff2 = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgc2Off + 0xE8));
+        var cell2FirstSector = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgc2Off + cpbOff2 + 8));
+        Assert.True(cell2FirstSector > 0, $"Cell 2 first_sector should be > 0 (got {cell2FirstSector})");
+
         var vob2 = new byte[2048];
-        await using (var fs2 = File.OpenRead(Path.Combine(videoTs, "VTS_01_2.VOB")))
+        await using (var fs2 = File.OpenRead(vobPath))
         {
+            fs2.Position = cell2FirstSector * 2048L;
             await fs2.ReadExactlyAsync(vob2);
         }
         var vob2Lbn = BinaryPrimitives.ReadUInt32BigEndian(vob2.AsSpan(0x2D));
-        Assert.True(vob2Lbn > 0, $"VOB 2 LBN should be > 0 (got {vob2Lbn})");
+        Assert.Equal(cell2FirstSector, vob2Lbn);
     }
 
     // ── Menu Pipeline Integration Tests ─────────────────────────────
@@ -869,8 +877,9 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     public async Task MenuBinary_cell_playback_first_ilvu_end_sector_equals_last_sector()
     {
         // Hardware players (Sony etc.) need first_ilvu_end_sector populated even for
-        // non-interleaved cells. dvdauthor sets it to last_sector; leaving it 0 causes
-        // the player to skip playback and jump straight to the post-command.
+        // non-interleaved cells. The DVD spec requires it equal last_sector for
+        // non-interleaved cells; leaving it 0 causes the player to skip playback
+        // and jump straight to the post-command.
         var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
         if (authored is null) return;
         var (videoTs, vtsIfo, vmgIfo) = authored.Value;
@@ -898,6 +907,39 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task MenuBinary_cell_playback_has_stc_discontinuity_flag()
+    {
+        // Each title cell plays a separately-muxed VOB with its own SCR timeline starting near 0.
+        // Without STC_discontinuity (bit 1 = 0x02 in cell_playback byte 0), hardware players keep
+        // the STC from the previous video's end and fast-scan through subsequent videos.
+        // This is critical for PlayNextVideo where LinkPGCN stays in VTSTitle domain (no STC reset).
+        // dvdauthor always sets this flag (dvdpgc.c:367-370).
+        var authored = await AuthorSingleChannelMenuDvd(endOfVideoAction: TitleEndBehavior.PlayNextVideo);
+        if (authored is null) return;
+        var (videoTs, vtsIfo, vmgIfo) = authored.Value;
+
+        var pgcitSec = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(0xCC));
+        var pgcitBase = (int)pgcitSec * 2048;
+        var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcitBase));
+
+        for (var i = 0; i < pgcCount; i++)
+        {
+            var pgcOff = BinaryPrimitives.ReadUInt32BigEndian(vtsIfo.AsSpan(pgcitBase + 8 + i * 8 + 4));
+            var pgcAbs = pgcitBase + (int)pgcOff;
+            var nrOfCells = vtsIfo[pgcAbs + 0x03];
+            var cpbOffset = BinaryPrimitives.ReadUInt16BigEndian(vtsIfo.AsSpan(pgcAbs + 0xE8));
+            var cpbAbs = pgcAbs + cpbOffset;
+
+            for (var c = 0; c < nrOfCells; c++)
+            {
+                var cellByte0 = vtsIfo[cpbAbs + c * 24];
+                Assert.True((cellByte0 & 0x02) != 0,
+                    $"PGC {i + 1}, cell {c + 1}: STC_discontinuity flag (0x02) must be set in cell_playback byte 0, got 0x{cellByte0:X2}");
+            }
+        }
+    }
+
+    [Fact]
     public async Task MenuBinary_single_channel_file_layout()
     {
         var authored = await AuthorSingleChannelMenuDvd();
@@ -914,9 +956,8 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var vmgBup = await File.ReadAllBytesAsync(Path.Combine(videoTs, "VIDEO_TS.BUP"));
         Assert.True(vmgIfo.AsSpan().SequenceEqual(vmgBup), "VIDEO_TS.BUP != VIDEO_TS.IFO");
 
-        // Title VOBs exist
-        Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_1.VOB")), "Title VOB 1 missing");
-        Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_2.VOB")), "Title VOB 2 missing");
+        // Concatenated title VOB exists
+        Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_1.VOB")), "Title VOB missing");
 
         // Menu VOB exists
         Assert.True(File.Exists(Path.Combine(videoTs, "VTS_01_0.VOB")), "Menu VOB missing");
@@ -1011,9 +1052,8 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
             Assert.True(File.Exists(menuVobPath), $"{vtsTag}_0.VOB missing");
             Assert.True(new FileInfo(menuVobPath).Length % 2048 == 0, $"{vtsTag}_0.VOB not sector-aligned");
 
-            // Title VOBs exist
+            // Concatenated title VOB exists
             Assert.True(File.Exists(Path.Combine(videoTs, $"{vtsTag}_1.VOB")), $"{vtsTag}_1.VOB missing");
-            Assert.True(File.Exists(Path.Combine(videoTs, $"{vtsTag}_2.VOB")), $"{vtsTag}_2.VOB missing");
 
             // VTS IFO has VTSM_PGCI_UT
             var ifo = vtsIfos[ch];

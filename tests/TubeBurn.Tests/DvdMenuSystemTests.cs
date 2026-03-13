@@ -658,8 +658,8 @@ public sealed class DvdMenuSystemTests
         var pgcCount = BinaryPrimitives.ReadUInt16BigEndian(ifo.AsSpan(pgcitBase));
         Assert.Equal(4, pgcCount);
 
-        Assert.Equal(0x81, ifo[pgcitBase + 8]);      // PGC 1 = entry for title 1
-        Assert.Equal(0x82, ifo[pgcitBase + 8 + 8]);  // PGC 2 = entry for title 2
+        Assert.Equal(0x80, ifo[pgcitBase + 8]);      // PGC 1 = entry PGC (no block/parental flags)
+        Assert.Equal(0x80, ifo[pgcitBase + 8 + 8]);  // PGC 2 = entry PGC
 
         // Post-commands: ALL return to menu (CallSS VTSM)
         for (var t = 0; t < pgcCount; t++)
