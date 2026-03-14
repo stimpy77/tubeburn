@@ -116,10 +116,10 @@ public static class DvdIfoWriter
 
         if (hasVmgmMenu && vtsCount > 1)
         {
-            // Multi-channel: JumpSS VMGM root menu
-            // Reference: dvdcompile.c:812 — 0x40 + (123-120) = 0x43
+            // Multi-channel: JumpSS VMGM title menu
+            // VMGM only supports title menu (type 2); root menu (type 3) is VTSM-only.
             cmd[8] = 0x30; cmd[9] = 0x06;
-            cmd[13] = 0x43; // VMGM root menu = 0x40 | 3
+            cmd[13] = 0x42; // VMGM title menu = 0x40 | 2
         }
         else if (hasVmgmMenu || hasVtsmMenus)
         {
@@ -707,7 +707,9 @@ public static class DvdIfoWriter
         {
             var srp = lu.Slice(8 + srpIdx * 8, 8);
             // entry_id: bit 7 = entry PGC, bits 3-0 = menu_type (3 = root)
-            srp[0] = i == 0 ? (byte)0x83 : (byte)0x00;          // first page is root menu entry PGC
+            // VTSM: first PGC is root menu entry (0x83). VMGM: title menu entry already
+            // added above (0x82), so all PGCs in the loop are non-entry (0x00).
+            srp[0] = i == 0 && !isVmgm ? (byte)0x83 : (byte)0x00;
             Write32(srp, 4, (uint)(pgcDataOff + i * menuPgcLen));
             srpIdx++;
         }

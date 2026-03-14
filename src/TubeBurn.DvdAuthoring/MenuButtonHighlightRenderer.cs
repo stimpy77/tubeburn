@@ -25,9 +25,16 @@ public static class MenuButtonHighlightRenderer
         var height = standard == VideoStandard.Ntsc ? 480 : 576;
         var bitmap = new byte[width * height];
 
+        // Apply PAR compensation to match SkiaMenuRenderer's pre-squeezed visual layout.
+        // Menus are 16:9 anamorphic; NTSC PAR = 40:33, PAL PAR = 64:45.
+        var parScale = standard == VideoStandard.Ntsc ? 33f / 40f : 45f / 64f;
+        var parOffset = 720f * (1f - parScale) / 2f;
+
         foreach (var button in buttons)
         {
-            DrawButtonBorder(bitmap, width, height, button.X, button.Y, button.Width, button.Height);
+            var px = (int)(parOffset + button.X * parScale);
+            var pw = (int)(button.Width * parScale);
+            DrawButtonBorder(bitmap, width, height, px, button.Y, pw, button.Height);
         }
 
         return bitmap;

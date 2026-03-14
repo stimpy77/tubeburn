@@ -80,12 +80,12 @@ public sealed class DvdCommandCodec
                 break;
 
             case CallSsVmgmCommand callVmgm:
-                // CallSS VMGM root menu, rsm_cell
-                // Reference: dvdcompile.c:1110
+                // CallSS VMGM title menu, rsm_cell
+                // VMGM only supports title menu (type 2); root menu (type 3) is VTSM-only.
                 buffer[0] = 0x30;
                 buffer[1] = 0x08;
                 buffer[4] = callVmgm.ResumeCell;
-                buffer[5] = 0x43; // VMGM root = 0x40 | 3
+                buffer[5] = 0x42; // VMGM title menu = 0x40 | 2
                 break;
 
             case JumpSsVtsmCommand jumpVtsm:
@@ -104,10 +104,11 @@ public sealed class DvdCommandCodec
                 break;
 
             case JumpSsVmgmCommand:
-                // JumpSS VMGM root menu — works from any domain (VTSM, VTSTitle, etc.)
+                // JumpSS VMGM title menu — works from any domain (VTSM, VTSTitle, etc.)
+                // VMGM only supports title menu (type 2); root menu (type 3) is VTSM-only.
                 buffer[0] = 0x30;
                 buffer[1] = 0x06;
-                buffer[5] = 0x43; // VMGM root = 0x40 | 3
+                buffer[5] = 0x42; // VMGM title menu = 0x40 | 2
                 break;
 
             case JumpVtsTtCommand jumpVtsTt:

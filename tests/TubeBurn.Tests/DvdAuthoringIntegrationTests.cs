@@ -1006,7 +1006,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var preCmd = vmgIfo.AsSpan(fpPgcOff + cmdTblOff + 8, 8);
         Assert.Equal(0x30, preCmd[0]);
         Assert.Equal(0x06, preCmd[1]);
-        Assert.Equal(0x43, preCmd[5]); // VMGM root
+        Assert.Equal(0x42, preCmd[5]); // VMGM title menu
 
         // ── VMGM_PGCI_UT (offset 0xC8) > 0 ──
         var vmgmPgciUtSec = BinaryPrimitives.ReadUInt32BigEndian(vmgIfo.AsSpan(0xC8));

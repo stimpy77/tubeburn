@@ -44,7 +44,7 @@ public sealed class DvdMenuSystemTests
         Assert.Equal(0x30, bytes[0]);
         Assert.Equal(0x08, bytes[1]);
         Assert.Equal(0x01, bytes[4]); // resume cell
-        Assert.Equal(0x43, bytes[5]); // VMGM root = 0x40 | 3
+        Assert.Equal(0x42, bytes[5]); // VMGM title menu = 0x40 | 2
         Assert.Equal(0x00, bytes[7]); // unused
     }
 
@@ -55,7 +55,7 @@ public sealed class DvdMenuSystemTests
         Assert.Equal(8, bytes.Length);
         Assert.Equal(0x30, bytes[0]);
         Assert.Equal(0x06, bytes[1]); // JumpSS (not CallSS 0x08)
-        Assert.Equal(0x43, bytes[5]); // VMGM root = 0x40 | 3
+        Assert.Equal(0x42, bytes[5]); // VMGM title menu = 0x40 | 2
     }
 
     [Fact]
@@ -182,12 +182,18 @@ public sealed class DvdMenuSystemTests
 
         var bitmap = MenuButtonHighlightRenderer.Render(buttons, VideoStandard.Ntsc);
 
-        // Top-left corner of button should be non-zero (border)
-        Assert.Equal(1, bitmap[100 * 720 + 100]);
-        Assert.Equal(1, bitmap[100 * 720 + 150]); // top border middle
+        // PAR-adjusted coordinates: NTSC parScale=33/40=0.825, parOffset=63
+        // Button (100,100,200,100) → x=63+100*0.825=145, w=200*0.825=165
+        var parX = (int)(63f + 100 * 0.825f);   // 145
+        var parMid = (int)(63f + 150 * 0.825f);  // 186
 
-        // Interior of button should be 0 (transparent)
-        Assert.Equal(0, bitmap[150 * 720 + 200]); // center of button
+        // Top-left corner of PAR-adjusted button should be non-zero (border)
+        Assert.Equal(1, bitmap[100 * 720 + parX]);
+        Assert.Equal(1, bitmap[100 * 720 + parMid]); // top border middle
+
+        // Interior of PAR-adjusted button should be 0 (transparent)
+        var interiorX = (int)(63f + 200 * 0.825f); // ~228
+        Assert.Equal(0, bitmap[150 * 720 + interiorX]); // center of button
     }
 
     [Fact]

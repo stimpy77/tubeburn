@@ -251,8 +251,13 @@ public static class MenuVobBuilder
             var button = buttons[i];
             var entry = buf.Slice(btniBase + i * 18, 18);
 
-            var x1 = Math.Max(0, button.X);
-            var x2 = Math.Min(719, button.X + button.Width - 1);
+            // Apply PAR compensation to match SkiaMenuRenderer's pre-squeezed visual layout.
+            // Menus are 16:9 anamorphic; NTSC PAR = 40:33, PAL PAR = 64:45.
+            var parScale = standard == VideoStandard.Ntsc ? 33f / 40f : 45f / 64f;
+            var parOffset = 720f * (1f - parScale) / 2f;
+
+            var x1 = Math.Max(0, (int)(parOffset + button.X * parScale));
+            var x2 = Math.Min(719, (int)(parOffset + (button.X + button.Width) * parScale) - 1);
             var y1 = Math.Max(0, button.Y);
             var y2 = Math.Min(standard == VideoStandard.Ntsc ? 479 : 575, button.Y + button.Height - 1);
 
