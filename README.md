@@ -2,8 +2,6 @@
   <img src="assets/logo.png" alt="TubeBurn" width="200">
 </p>
 
-<h1 align="center">TubeBurn</h1>
-
 <p align="center">
   A cross-platform desktop application that downloads YouTube videos, authors a DVD-Video disc with interactive menus, and burns it to DVD-R.<br>
   Built with .NET 10, C#, and Avalonia UI.
