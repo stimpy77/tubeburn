@@ -554,8 +554,8 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var hliSs = BinaryPrimitives.ReadUInt16BigEndian(menuVobData.AsSpan(0x8D));
         Assert.True(hliSs != 0, $"HLI hli_ss should be non-zero (got {hliSs})");
 
-        // Button count: btn_ns is 6 bits at 0x9D bit[0] (hi) + 0x9E bits[7:3] (lo)
-        var buttonCount = ((menuVobData[0x9D] & 0x01) << 5) | ((menuVobData[0x9E] >> 3) & 0x1F);
+        // Button count: btn_ns is raw byte at 0x9E (matches dvdauthor dvdvob.c)
+        var buttonCount = menuVobData[0x9E];
         Assert.True(buttonCount >= 2, $"Expected at least 2 buttons, got {buttonCount}");
 
         // btngr_ns must be non-zero (byte 0x9B bits[5:4])
@@ -989,7 +989,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         var hliSs = BinaryPrimitives.ReadUInt16BigEndian(vmgMenuVob.AsSpan(0x8D));
         Assert.True(hliSs != 0, "VMG menu VOB HLI hli_ss should be non-zero");
 
-        var buttonCount = ((vmgMenuVob[0x9D] & 0x01) << 5) | ((vmgMenuVob[0x9E] >> 3) & 0x1F);
+        var buttonCount = vmgMenuVob[0x9E];
         Assert.True(buttonCount >= 2, $"Expected at least 2 channel-select buttons, got {buttonCount}");
 
         // Channel-select buttons use JumpSsVtsm (0x30, 0x06)
@@ -1096,7 +1096,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         {
             await fs.ReadExactlyAsync(menuVob);
         }
-        var buttonCount = ((menuVob[0x9D] & 0x01) << 5) | ((menuVob[0x9E] >> 3) & 0x1F);
+        var buttonCount = menuVob[0x9E];
         Assert.True(buttonCount >= 1, $"Expected at least 1 button, got {buttonCount}");
 
         // FP_PGC still routes to menu
@@ -1130,7 +1130,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         {
             await fs.ReadExactlyAsync(vmgMenuVob);
         }
-        var chButtonCount = ((vmgMenuVob[0x9D] & 0x01) << 5) | ((vmgMenuVob[0x9E] >> 3) & 0x1F);
+        var chButtonCount = vmgMenuVob[0x9E];
         Assert.Equal(3, chButtonCount);
 
         // Each VTS has menu + title VOBs
@@ -1149,7 +1149,7 @@ public sealed class DvdAuthoringIntegrationTests : IDisposable
         {
             await fs2.ReadExactlyAsync(vts3MenuVob);
         }
-        var vts3ButtonCount = ((vts3MenuVob[0x9D] & 0x01) << 5) | ((vts3MenuVob[0x9E] >> 3) & 0x1F);
+        var vts3ButtonCount = vts3MenuVob[0x9E];
         Assert.True(vts3ButtonCount >= 1, $"VTS 3 should have at least 1 button, got {vts3ButtonCount}");
 
         // Channel-select buttons target correct VTS numbers

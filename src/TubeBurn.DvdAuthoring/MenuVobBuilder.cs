@@ -198,20 +198,16 @@ public static class MenuVobBuilder
         Write32(buf, 0x93, 0xFFFFFFFF); // hli_e_ptm
         Write32(buf, 0x97, 0xFFFFFFFF); // btn_sl_e_ptm
 
-        // HL_GI bitfields at 0x9B (8 bytes, bit-packed, MSB-first per DVD spec):
-        // Byte 0x9B: zero1(2) | btngr_ns(2) | zero2(4)
-        // Byte 0x9C: btngr1_dsp_ty(3) | btngr2_dsp_ty(3) | btngr3_dsp_ty_hi(2)
-        // Byte 0x9D: btngr3_dsp_ty_lo(1) | btn_ofn(6) | btn_ns_hi(1)
-        // Byte 0x9E: btn_ns_lo(5) | nsl_btn_ns_hi(3)
-        // Byte 0x9F: nsl_btn_ns_lo(3) | zero5(5)
-        // Bytes 0xA0-0xA2: fosl_btnn(6) | foac_btnn(6) | padding
+        // HL_GI: button group and count fields.
+        // Layout matches dvdauthor dvdvob.c — raw byte values, not bit-packed.
+        // 0x9B-0x9C: btngr_ns + display type (write2 in dvdauthor)
+        // 0x9E: btn_ns (number of buttons, raw byte)
+        // 0x9F: nsl_btn_ns (number of numerically-selectable buttons, raw byte)
         var btnCount = Math.Min(buttons.Count, 36);
-        buf[0x9B] = 0x10;                                      // btngr_ns=1 at bits[5:4]
-        buf[0x9C] = 0x20;                                      // btngr1_dsp_ty = 1 (2-contrast subpicture)
-        buf[0x9D] = (byte)((btnCount >> 5) & 0x01);            // btn_ns bit 5
-        buf[0x9E] = (byte)(((btnCount & 0x1F) << 3) |          // btn_ns bits [4:0]
-                           ((btnCount >> 3) & 0x07));           // nsl_btn_ns bits [5:3]
-        buf[0x9F] = (byte)((btnCount & 0x07) << 5);            // nsl_btn_ns bits [2:0]
+        buf[0x9B] = 0x10;                                      // btngr_ns=1 (0x1000 >> 8)
+        buf[0x9C] = 0x00;                                      // btngr1_dsp_ty (dvdauthor adds per subpicture stream)
+        buf[0x9E] = (byte)btnCount;                             // btn_ns
+        buf[0x9F] = (byte)btnCount;                             // nsl_btn_ns
 
         // BTN_COLI: button color info at 0xA3 (24 bytes = 3 groups × 8 bytes)
         // Each group: [SL_COLI:4][AC_COLI:4] (selection + action palette)
@@ -270,12 +266,13 @@ public static class MenuVobBuilder
             entry[4] = (byte)((y1 << 4) | (y2 >> 8));
             entry[5] = (byte)(y2 & 0xFF);
 
-            // Navigation: up/down/left/right button numbers (full bytes, 1-based)
+            // Navigation: up/down/left/right button numbers (1-based, raw bytes).
+            // Matches dvdauthor dvdvob.c: boffs[6..9] = findbutton() return value.
             var nav = button.Navigation;
-            entry[6] = (byte)(nav.Up & 0xFF);
-            entry[7] = (byte)(nav.Down & 0xFF);
-            entry[8] = (byte)(nav.Left & 0xFF);
-            entry[9] = (byte)(nav.Right & 0xFF);
+            entry[6] = (byte)nav.Up;
+            entry[7] = (byte)nav.Down;
+            entry[8] = (byte)nav.Left;
+            entry[9] = (byte)nav.Right;
 
             // 8-byte VM command
             var cmd = MapButtonCommand(button.ActivateCommand, codec);
