@@ -33,7 +33,7 @@ public sealed class DvdVobPlanner
                     var ratio = (double)segmentSize / Math.Max(video.EstimatedSizeBytes, 1);
                     var segmentDuration = TimeSpan.FromSeconds(Math.Max(1, video.Duration.TotalSeconds * ratio));
 
-                    segments.Add(new VobSegmentPlan(channel.Name, segmentNumber++, segmentSize, segmentDuration));
+                    segments.Add(new VobSegmentPlan(channel.DisplayName, segmentNumber++, segmentSize, segmentDuration));
 
                     remainingSize -= segmentSize;
                     remainingDuration -= segmentDuration;

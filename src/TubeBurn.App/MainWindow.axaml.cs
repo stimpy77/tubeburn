@@ -54,6 +54,7 @@ public partial class MainWindow : Window
         {
             viewModel.SetLogFilePath(AppLog.GetCurrentLogFilePath());
             viewModel.SetAvailableBurnDrives(DiscoverBurnDriveOptions());
+            viewModel.SetToolStatuses(_toolDiscoveryService.Discover(viewModel.BuildProject().Settings));
         }
     }
 
@@ -377,6 +378,7 @@ public partial class MainWindow : Window
 
         var project = await _projectFileService.LoadAsync(path);
         ViewModel.LoadProject(project);
+        ViewModel.SetToolStatuses(_toolDiscoveryService.Discover(ViewModel.BuildProject().Settings));
         ViewModel.RefreshEstimatedSizesFromDisk();
         ClearPendingBurnRetryContext();
         AppLog.Info($"Project loaded: {path}");
@@ -620,6 +622,9 @@ public partial class MainWindow : Window
 
             foreach (var childDirectory in Directory.EnumerateDirectories(directoryPath))
             {
+                // Preserve .tubeburn/ so authored VIDEO_TS output survives for burn redo.
+                if (Path.GetFileName(childDirectory) == ".tubeburn")
+                    continue;
                 Directory.Delete(childDirectory, recursive: true);
             }
 
@@ -980,6 +985,12 @@ public partial class MainWindow : Window
 
     private void OnClearQueueClick(object? sender, RoutedEventArgs e) => ViewModel.ClearQueue();
 
+    private void OnResetChannelOverrideClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ViewModels.ChannelOverrideEntry entry })
+            entry.ResetToResolved();
+    }
+
     private void OnOpenLogsFolderClick(object? sender, RoutedEventArgs e)
     {
         try
@@ -1044,7 +1055,15 @@ public partial class MainWindow : Window
                     if (item.IsEstimating || string.IsNullOrWhiteSpace(item.Channel))
                     {
                         await Dispatcher.UIThread.InvokeAsync(() =>
-                            ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds, meta.AspectRatio));
+                        {
+                            if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
+                                item.ChannelUrl = meta.ChannelUrl;
+                            ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds, meta.AspectRatio);
+                        });
+                    }
+                    else if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() => item.ChannelUrl = meta.ChannelUrl);
                     }
 
                     if (!string.IsNullOrWhiteSpace(meta.ThumbnailUrl))
@@ -1059,11 +1078,6 @@ public partial class MainWindow : Window
                         {
                             await Dispatcher.UIThread.InvokeAsync(() => item.ThumbnailPath = thumbPath);
                         }
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
-                    {
-                        await Dispatcher.UIThread.InvokeAsync(() => item.ChannelUrl = meta.ChannelUrl);
                     }
                 }
                 catch (Exception ex)
@@ -1246,11 +1260,11 @@ public partial class MainWindow : Window
 
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
+                        if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
+                            item.ChannelUrl = meta.ChannelUrl;
                         ViewModel.ApplyResolvedMetadata(item.Url, meta.Title, meta.Channel, meta.DurationSeconds, meta.AspectRatio);
                         if (thumbPath is not null)
                             item.ThumbnailPath = thumbPath;
-                        if (!string.IsNullOrWhiteSpace(meta.ChannelUrl))
-                            item.ChannelUrl = meta.ChannelUrl;
                     });
                 }
                 else

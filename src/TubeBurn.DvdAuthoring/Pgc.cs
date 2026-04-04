@@ -34,7 +34,7 @@ public sealed class DvdPgcCompiler
                     ? _codec.Encode(new LinkPreviousProgramCommand())
                     : _codec.Encode(new JumpToTitlesetCommand((byte)(pgcs.Count + 1))));
 
-            pgcs.Add(new CompiledPgc(channel.Name, preCommands, postCommands, channel.Videos.Count));
+            pgcs.Add(new CompiledPgc(channel.DisplayName, preCommands, postCommands, channel.Videos.Count));
         }
 
         return pgcs;

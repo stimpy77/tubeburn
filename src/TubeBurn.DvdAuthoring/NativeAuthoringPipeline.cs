@@ -122,13 +122,16 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         Directory.CreateDirectory(Path.Combine(request.WorkingDirectory, "AUDIO_TS"));
 
         var isoPath = Path.Combine(request.WorkingDirectory, "tubeburn.iso");
-        await BuildIsoAsync(request.WorkingDirectory, isoPath, cancellationToken);
+        var isoError = await BuildIsoAsync(request.WorkingDirectory, isoPath, cancellationToken);
+        var isoCreated = isoError is null;
 
         return new AuthoringResult(
             Kind,
             AuthoringResultStatus.Succeeded,
-            "Native authoring generated VIDEO_TS and ISO artifacts.",
-            [planPath, videoTsDirectory, isoPath],
+            isoCreated
+                ? "Native authoring generated VIDEO_TS and ISO."
+                : $"Native authoring generated VIDEO_TS. ISO skipped: {isoError}",
+            isoCreated ? [planPath, videoTsDirectory, isoPath] : [planPath, videoTsDirectory],
             []);
     }
 
@@ -151,7 +154,8 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         var chaptersPerTitle = new List<int>();
         // Multi-title topology: each video is its own PGC/title, JumpVtsTt button commands.
         // PlayNextVideo behavior is handled by LinkPGCN post-commands in WriteMultiTitlePgcs.
-        // Multi-chapter topology (JumpVtsPtt) is avoided — VLC doesn't activate it from VTSM domain.
+        // Multi-chapter topology (JumpVtsPtt) was tried and disabled — VLC doesn't activate it
+        // from VTSM domain, and hardware compat issues remain (see commits b0bbf66, 340a801).
         var useChapters = false;
 
         // Process each channel as a separate VTS
@@ -295,13 +299,16 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         Directory.CreateDirectory(Path.Combine(request.WorkingDirectory, "AUDIO_TS"));
 
         var isoPath = Path.Combine(request.WorkingDirectory, "tubeburn.iso");
-        await BuildIsoAsync(request.WorkingDirectory, isoPath, cancellationToken);
+        var isoError = await BuildIsoAsync(request.WorkingDirectory, isoPath, cancellationToken);
+        var isoCreated = isoError is null;
 
         return new AuthoringResult(
             Kind,
             AuthoringResultStatus.Succeeded,
-            "Native authoring with DVD menus generated VIDEO_TS and ISO artifacts.",
-            [planPath, videoTsDirectory, isoPath],
+            isoCreated
+                ? "Native authoring with menus generated VIDEO_TS and ISO."
+                : $"Native authoring with menus generated VIDEO_TS. ISO skipped: {isoError}",
+            isoCreated ? [planPath, videoTsDirectory, isoPath] : [planPath, videoTsDirectory],
             []);
     }
 
@@ -378,7 +385,11 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             [0, 0, 0, 0]); // Initially transparent; BTN_COLI overrides for selected button
     }
 
-    private static async Task BuildIsoAsync(string dvdRootDirectory, string isoPath, CancellationToken cancellationToken)
+    /// <summary>
+    /// Attempts to build an ISO. Returns null on success, or an error message on failure.
+    /// Authoring is still considered successful without an ISO — native burn uses VIDEO_TS directly.
+    /// </summary>
+    private static async Task<string?> BuildIsoAsync(string dvdRootDirectory, string isoPath, CancellationToken cancellationToken)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -386,51 +397,73 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
             {
                 var isoBuilt = await RunStaAsync(() => TryBuildIsoWithImapi(dvdRootDirectory, isoPath, cancellationToken), cancellationToken);
                 if (isoBuilt)
-                {
-                    return;
-                }
+                    return null;
+
+                return "IMAPI2FS returned false (MsftFileSystemImage may be unavailable or VIDEO_TS is missing).";
             }
             catch (OperationCanceledException)
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
-                // Fall back to deterministic placeholder ISO payload when IMAPI2FS is unavailable.
+                return $"IMAPI2FS ISO creation failed: {ex.GetType().Name}: {ex.Message}";
             }
         }
 
-        await File.WriteAllBytesAsync(isoPath, System.Text.Encoding.ASCII.GetBytes("TBISO001"), cancellationToken);
+        return "ISO creation is only supported on Windows (IMAPI2FS).";
     }
 
-    private static bool TryBuildIsoWithImapi(string dvdRootDirectory, string isoPath, CancellationToken cancellationToken)
+    private static bool TryBuildIsoWithImapi(string workingDirectory, string isoPath, CancellationToken cancellationToken)
     {
         var imageType = Type.GetTypeFromProgID("IMAPI2FS.MsftFileSystemImage");
         if (imageType is null)
-        {
             return false;
-        }
 
-        dynamic image = Activator.CreateInstance(imageType)
-            ?? throw new InvalidOperationException("Failed to create IMAPI2FS image instance.");
-        image.FileSystemsToCreate = 4; // UDF
-        try { image.UDFRevision = 0x102; } catch { /* best-effort UDF 1.02 */ }
-        image.VolumeName = "TUBEBURN";
-        dynamic root = image.Root;
-        root.AddTree(dvdRootDirectory, false);
-        dynamic result = image.CreateResultImage();
-        if (result.ImageStream is IStream stream)
+        var videoTsPath = Path.Combine(workingDirectory, "VIDEO_TS");
+        if (!Directory.Exists(videoTsPath))
+            return false;
+
+        object? comImage = null;
+        object? comResult = null;
+        try
         {
+            dynamic image = Activator.CreateInstance(imageType)
+                ?? throw new InvalidOperationException("Failed to create IMAPI2FS image instance.");
+            comImage = image;
+            image.FileSystemsToCreate = 5; // ISO9660 + UDF bridge for DVD-Video compatibility
+            try { image.UDFRevision = 0x102; } catch { /* best-effort UDF 1.02 */ }
+            image.VolumeName = "DVD_VIDEO";
+            // Default FreeMediaBlocks is too small for DVD content. Set to DVD-9 capacity
+            // (~8.5 GB / 2048 bytes per sector) so the image builder doesn't reject large VOBs.
+            try { image.FreeMediaBlocks = 4_200_000; } catch { /* best-effort */ }
+
+            // Explicit DVD-Video directory layout — only VIDEO_TS and AUDIO_TS.
+            // AddTree with includeBaseDirectory=true creates the named subdirectory.
+            dynamic root = image.Root;
+            root.AddTree(videoTsPath, true);
+            root.AddDirectory("AUDIO_TS");
+
+            dynamic result = image.CreateResultImage();
+            comResult = result;
+
+            // COM interop may not satisfy 'is IStream' — cast explicitly.
+            var stream = (IStream)result.ImageStream;
             CopyComStreamToFile(stream, isoPath, cancellationToken);
             return true;
         }
-
-        return false;
+        finally
+        {
+            if (comResult is not null)
+                try { Marshal.ReleaseComObject(comResult); } catch { }
+            if (comImage is not null)
+                try { Marshal.ReleaseComObject(comImage); } catch { }
+        }
     }
 
     private static void CopyComStreamToFile(IStream stream, string outputPath, CancellationToken cancellationToken)
     {
-        using var file = File.Create(outputPath);
+        var tempPath = outputPath + ".tmp";
         var buffer = new byte[64 * 1024];
         var bytesReadPtr = IntPtr.Zero;
 
@@ -438,25 +471,31 @@ public sealed class NativeAuthoringPipeline : IDvdAuthoringBackend
         {
             bytesReadPtr = Marshal.AllocCoTaskMem(sizeof(int));
 
-            while (true)
+            using (var file = File.Create(tempPath))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                stream.Read(buffer, buffer.Length, bytesReadPtr);
-                var bytesRead = Marshal.ReadInt32(bytesReadPtr);
-                if (bytesRead <= 0)
+                while (true)
                 {
-                    break;
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    stream.Read(buffer, buffer.Length, bytesReadPtr);
+                    var bytesRead = Marshal.ReadInt32(bytesReadPtr);
+                    if (bytesRead <= 0)
+                        break;
 
-                file.Write(buffer, 0, bytesRead);
+                    file.Write(buffer, 0, bytesRead);
+                }
             }
+
+            File.Move(tempPath, outputPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { }
+            throw;
         }
         finally
         {
             if (bytesReadPtr != IntPtr.Zero)
-            {
                 Marshal.FreeCoTaskMem(bytesReadPtr);
-            }
         }
     }
 

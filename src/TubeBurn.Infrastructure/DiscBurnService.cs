@@ -55,28 +55,42 @@ public sealed class DiscBurnService
 
         if (OperatingSystem.IsWindows())
         {
-            var allowImgBurnFallback = string.Equals(
+            if (settings.PreferredBurnBackend == BurnBackendKind.Spti)
+            {
+                return new DiscBurnResult(
+                    DiscBurnOutcome.Failed,
+                    "Native (SPTI) burn backend is not yet implemented. Select Native (IMAPI2) or External (ImgBurn).");
+            }
+
+            var preferImgBurn = settings.PreferredBurnBackend == BurnBackendKind.ImgBurn;
+            var allowImgBurnFallback = preferImgBurn || string.Equals(
                 Environment.GetEnvironmentVariable("TB_ENABLE_IMGBURN_FALLBACK"),
                 "1",
                 StringComparison.Ordinal);
-            // Try once, and if it fails with a "not ready" style error, wait 10s
-            // and auto-retry once before surfacing the failure to the user.
-            var nativeBurnAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
-            if (nativeBurnAttempt.Outcome == DiscBurnOutcome.Succeeded)
-            {
-                return nativeBurnAttempt;
-            }
 
-            // Auto-retry once after a short delay — the drive often just needs
-            // a moment to settle after initial disc insertion.
-            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
-            var retryAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
-            if (retryAttempt.Outcome == DiscBurnOutcome.Succeeded)
-            {
-                return retryAttempt;
-            }
+            string? nativeFailureSummary = null;
 
-            var nativeFailureSummary = $"Native {requestedSpeed}x: {nativeBurnAttempt.Summary} | Auto-retry: {retryAttempt.Summary}";
+            if (!preferImgBurn)
+            {
+                // Try once, and if it fails with a "not ready" style error, wait 10s
+                // and auto-retry once before surfacing the failure to the user.
+                var nativeBurnAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
+                if (nativeBurnAttempt.Outcome == DiscBurnOutcome.Succeeded)
+                {
+                    return nativeBurnAttempt;
+                }
+
+                // Auto-retry once after a short delay — the drive often just needs
+                // a moment to settle after initial disc insertion.
+                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+                var retryAttempt = await TryBurnWithImapiAsync(videoTsPath, preferredDevice, requestedSpeed, cancellationToken);
+                if (retryAttempt.Outcome == DiscBurnOutcome.Succeeded)
+                {
+                    return retryAttempt;
+                }
+
+                nativeFailureSummary = $"Native {requestedSpeed}x: {nativeBurnAttempt.Summary} | Auto-retry: {retryAttempt.Summary}";
+            }
 
             if (!allowImgBurnFallback)
             {
@@ -88,11 +102,12 @@ public sealed class DiscBurnService
 
             var imgBurnResolution = ExternalToolPathResolver.Resolve("ImgBurn", settings.ImgBurnToolPath);
             var imgBurn = imgBurnResolution.ResolvedPath;
+            var imgBurnContext = preferImgBurn ? "ImgBurn selected but" : $"Windows native burn failed. {nativeFailureSummary} ImgBurn failover";
             if (imgBurn is null)
             {
                 return new DiscBurnResult(
                     DiscBurnOutcome.Failed,
-                    $"Windows native burn failed. {nativeFailureSummary} ImgBurn failover unavailable: {imgBurnResolution.Message}",
+                    $"{imgBurnContext} unavailable: {imgBurnResolution.Message}",
                     "ImgBurn /MODE WRITE /SRC <iso> /SPEED <Nx> /START");
             }
 
@@ -100,7 +115,7 @@ public sealed class DiscBurnService
             {
                 return new DiscBurnResult(
                     DiscBurnOutcome.Failed,
-                    $"Windows native burn failed. {nativeFailureSummary} ImgBurn failover unavailable: no ISO exists for ImgBurn fallback.",
+                    $"{imgBurnContext} unavailable: no ISO exists.",
                     "ImgBurn /MODE WRITE /SRC <iso> /SPEED <Nx> /START");
             }
 
@@ -123,13 +138,13 @@ public sealed class DiscBurnService
             {
                 return new DiscBurnResult(
                     DiscBurnOutcome.Succeeded,
-                    $"Disc burn completed through ImgBurn failover at {requestedSpeed}x.",
+                    $"Disc burn completed through ImgBurn at {requestedSpeed}x.",
                     imgBurnCommandPreview);
             }
 
             return new DiscBurnResult(
                 DiscBurnOutcome.Failed,
-                $"Windows burn failed. {nativeFailureSummary} | ImgBurn {requestedSpeed}x: failed (exit {imgBurnRun.ExitCode}).",
+                $"{imgBurnContext}: ImgBurn {requestedSpeed}x failed (exit {imgBurnRun.ExitCode}).",
                 imgBurnCommandPreview);
         }
 
@@ -576,13 +591,28 @@ public sealed class DiscBurnService
                 var paths = ReadVolumePathNames((object)recorder).ToList();
                 foreach (var mountPath in paths)
                 {
-                    var videoTs = Path.Combine(mountPath, "VIDEO_TS");
-                    if (Directory.Exists(videoTs))
+                    var videoTsIfo = Path.Combine(mountPath, "VIDEO_TS", "VIDEO_TS.IFO");
+                    if (!File.Exists(videoTsIfo))
+                        continue;
+
+                    // Actually read the file — Directory.Exists and File.Exists can
+                    // succeed from cached metadata even when the disc data is unreadable
+                    // (e.g. finalization was interrupted by a USB bus reset).
+                    try
                     {
+                        var ifoBytes = File.ReadAllBytes(videoTsIfo);
+                        if (ifoBytes.Length < 2048)
+                            continue; // IFO must be at least one DVD sector
+
                         return new DiscBurnResult(
                             DiscBurnOutcome.Succeeded,
                             "Burn completed (drive reset during finalization but disc verified OK).",
                             "IMAPI2 native burn (verified after bus reset)");
+                    }
+                    catch
+                    {
+                        // Data unreadable — disc is a coaster despite metadata being visible.
+                        continue;
                     }
                 }
             }

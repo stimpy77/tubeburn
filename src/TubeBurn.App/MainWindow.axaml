@@ -125,7 +125,7 @@
                                     <TextBlock Text="{Binding BuildStatus}" />
                                 </Border>
                                 <Border Classes="pill" Margin="0,0,8,8">
-                                    <TextBlock Text="{Binding SelectedBackend}" />
+                                    <TextBlock Text="{Binding BackendSummary}" />
                                 </Border>
                             </WrapPanel>
                             <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
@@ -310,7 +310,7 @@
                         <Border Classes="card">
                             <StackPanel Spacing="14">
                                 <TextBlock Classes="sectionTitle" Text="Project Settings" />
-                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                     <StackPanel Grid.Row="0" Grid.Column="0" Spacing="6">
                                         <TextBlock Classes="eyebrow" Text="VIDEO STANDARD" />
                                         <ComboBox ItemsSource="{Binding VideoStandards}" SelectedItem="{Binding SelectedVideoStandard, Mode=TwoWay}" />
@@ -328,36 +328,54 @@
                                         <ComboBox ItemsSource="{Binding WriteSpeeds}" SelectedItem="{Binding SelectedWriteSpeed, Mode=TwoWay}" />
                                     </StackPanel>
                                     <StackPanel Grid.Row="2" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
-                                        <TextBlock Classes="eyebrow" Text="BACKEND" />
-                                        <ComboBox ItemsSource="{Binding AvailableBackends}" SelectedItem="{Binding SelectedBackend, Mode=TwoWay}" />
+                                        <TextBlock Classes="eyebrow" Text="AUTHOR BACKEND" />
+                                        <ComboBox ItemsSource="{Binding AuthorBackends}" SelectedItem="{Binding SelectedAuthorBackend, Mode=TwoWay}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="viewModels:BackendOption">
+                                                    <TextBlock Text="{Binding Label}"
+                                                               Opacity="{Binding IsEnabled, Converter={x:Static viewModels:BoolToOpacityConverter.Instance}}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Row="2" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                        <TextBlock Classes="eyebrow" Text="BURN BACKEND" />
+                                        <ComboBox ItemsSource="{Binding BurnBackends}" SelectedItem="{Binding SelectedBurnBackend, Mode=TwoWay}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="viewModels:BackendOption">
+                                                    <TextBlock Text="{Binding Label}"
+                                                               Opacity="{Binding IsEnabled, Converter={x:Static viewModels:BoolToOpacityConverter.Instance}}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="3" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="BURN DRIVE" />
                                         <ComboBox ItemsSource="{Binding AvailableBurnDrives}" SelectedItem="{Binding SelectedBurnDrive, Mode=TwoWay}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="OUTPUT FOLDER" />
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                             <TextBox Text="{Binding OutputFolder, Mode=TwoWay}" />
                                             <Button x:Name="BrowseOutputFolderButton" Grid.Column="1" Classes="secondary" Click="OnChooseOutputFolderClick" Content="Browse" />
                                         </Grid>
                                     </StackPanel>
-                                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="MENU TITLE" />
                                         <TextBox Text="{Binding MenuTitle, Mode=TwoWay}" Watermark="Select Channel" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="5" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="6" Grid.Column="0" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="MENU FONT" />
                                         <ComboBox ItemsSource="{Binding FontFamilies}"
                                                   SelectedItem="{Binding SelectedFontFamily, Mode=TwoWay}"
                                                   MaxDropDownHeight="300" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="5" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="6" Grid.Column="1" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="FONT SIZE" />
                                         <ComboBox ItemsSource="{Binding FontSizes}"
                                                   SelectedItem="{Binding SelectedFontSize, Mode=TwoWay}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="ASPECT RATIO" />
                                         <StackPanel Spacing="4">
                                             <ToggleSwitch IsChecked="{Binding NormalizeResolution, Mode=TwoWay}"
@@ -375,7 +393,7 @@
                                                           Margin="24,0,0,0" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
+                                    <StackPanel Grid.Row="8" Grid.ColumnSpan="2" Spacing="6" Margin="0,10,0,0">
                                         <TextBlock Classes="eyebrow" Text="PLAYBACK NAVIGATION" />
                                         <StackPanel Spacing="4">
                                             <ToggleSwitch IsChecked="{Binding EndOfVideoGoToMenu, Mode=TwoWay}"
@@ -387,6 +405,38 @@
                                         </StackPanel>
                                     </StackPanel>
                                 </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Classes="card"
+                                IsVisible="{Binding ChannelOverrides.Count}">
+                            <StackPanel Spacing="14">
+                                <TextBlock Classes="sectionTitle" Text="Channels" />
+                                <TextBlock Classes="muted"
+                                           Text="Override channel names for the disc menu. Click Reset to revert to the YouTube name."
+                                           TextWrapping="Wrap" />
+                                <ItemsControl ItemsSource="{Binding ChannelOverrides}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="viewModels:ChannelOverrideEntry">
+                                            <StackPanel Spacing="4" Margin="0,0,0,10">
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                    <TextBox Grid.Column="0"
+                                                             Text="{Binding DisplayName, Mode=TwoWay}"
+                                                             Watermark="Channel name on disc" />
+                                                    <Button Grid.Column="1"
+                                                            Classes="secondary" Padding="8,6"
+                                                            Content="Reset"
+                                                            IsVisible="{Binding IsOverridden}"
+                                                            Click="OnResetChannelOverrideClick"
+                                                            Tag="{Binding}" />
+                                                </Grid>
+                                                <TextBlock Classes="muted" FontSize="11"
+                                                           IsVisible="{Binding IsOverridden}"
+                                                           Text="{Binding ResolvedName, StringFormat='YouTube: {0}'}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                             </StackPanel>
                         </Border>
 

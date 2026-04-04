@@ -54,7 +54,8 @@ public sealed class DvdProjectParser
         string? NextChapterAction = null,
         bool NormalizeResolution = false,
         bool NormalizeVignette = true,
-        bool ForceWidescreen = false)
+        bool ForceWidescreen = false,
+        string? PreferredBurnBackend = null)
     {
         public ProjectSettings ToSettings() =>
             new(
@@ -79,21 +80,26 @@ public sealed class DvdProjectParser
                 NextChapterAction: Enum.TryParse<TitleEndBehavior>(NextChapterAction, true, out var nca) ? nca : TitleEndBehavior.PlayNextVideo,
                 NormalizeResolution: NormalizeResolution,
                 NormalizeVignette: NormalizeVignette,
-                ForceWidescreen: ForceWidescreen);
+                ForceWidescreen: ForceWidescreen,
+                PreferredBurnBackend: Enum.TryParse<BurnBackendKind>(PreferredBurnBackend, true, out var pbb) ? pbb : BurnBackendKind.Imapi2);
     }
 
     private sealed record ChannelDocument(
         string Name,
         string BannerImagePath,
         string AvatarImagePath,
-        IReadOnlyList<VideoDocument> Videos)
+        IReadOnlyList<VideoDocument> Videos,
+        string ChannelUrl = "",
+        string? ChannelNameOverride = null)
     {
         public ChannelProject ToChannel() =>
             new(
                 Name,
                 BannerImagePath,
                 AvatarImagePath,
-                Videos.Select(static video => video.ToVideo()).ToList());
+                Videos.Select(static video => video.ToVideo()).ToList(),
+                ChannelUrl,
+                ChannelNameOverride);
     }
 
     private sealed record VideoDocument(

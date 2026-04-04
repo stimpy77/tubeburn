@@ -50,7 +50,7 @@ public sealed class MenuHighlightPlanner
                         video.Title);
                 }).ToList();
 
-                layouts.Add(new ChannelMenuLayout(channel.Name, page++, buttons, channel.BannerImagePath));
+                layouts.Add(new ChannelMenuLayout(channel.DisplayName, page++, buttons, channel.BannerImagePath));
             }
         }
 
@@ -141,7 +141,7 @@ public sealed class MenuHighlightPlanner
             buttons = AssignNavigation(buttons);
 
             pages.Add(new MenuPage(
-                channel.Name, pageNumber, buttons,
+                channel.DisplayName, pageNumber, buttons,
                 channel.BannerImagePath, MenuPageType.VideoSelect,
                 AvatarImagePath: channel.AvatarImagePath));
         }
@@ -175,7 +175,7 @@ public sealed class MenuHighlightPlanner
             buttons.Add(new MenuButton(
                 $"channel-{i + 1}",
                 SafeLeft, y, ButtonWidth, rowHeight,
-                channels[i].Name,
+                channels[i].DisplayName,
                 default!,
                 new DvdButtonCommand(DvdButtonCommandKind.JumpSsVtsm, vtsNumber),
                 ThumbnailPath: channels[i].AvatarImagePath,

@@ -26,6 +26,13 @@ public enum TitleEndBehavior
     GoToMenu,
 }
 
+public enum BurnBackendKind
+{
+    Imapi2,
+    Spti,
+    ImgBurn,
+}
+
 public sealed record ProjectSettings(
     VideoStandard Standard,
     DiscMediaKind MediaKind,
@@ -48,7 +55,8 @@ public sealed record ProjectSettings(
     TitleEndBehavior NextChapterAction = TitleEndBehavior.PlayNextVideo,
     bool NormalizeResolution = false,
     bool NormalizeVignette = true,
-    bool ForceWidescreen = false);
+    bool ForceWidescreen = false,
+    BurnBackendKind PreferredBurnBackend = BurnBackendKind.Imapi2);
 
 public sealed record VideoSource(
     string Url,
@@ -64,7 +72,13 @@ public sealed record ChannelProject(
     string Name,
     string BannerImagePath,
     string AvatarImagePath,
-    IReadOnlyList<VideoSource> Videos);
+    IReadOnlyList<VideoSource> Videos,
+    string ChannelUrl = "",
+    string? ChannelNameOverride = null)
+{
+    /// <summary>Effective name for disc menus: override if set, otherwise YouTube name.</summary>
+    public string DisplayName => ChannelNameOverride ?? Name;
+}
 
 public sealed record TubeBurnProject(
     string Name,

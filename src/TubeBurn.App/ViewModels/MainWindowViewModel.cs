@@ -30,7 +30,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private int _baselineBitrateKbps = 6000;
     private string _buildStatus = "Ready";
     private string _currentStage = "Idle";
-    private string _selectedBackend = "ExternalBridge";
+    private BackendOption? _selectedAuthorBackend;
+    private BackendOption? _selectedBurnBackend;
     private string _ytDlpToolPath = string.Empty;
     private string _ffmpegToolPath = string.Empty;
     private string _dvdauthorToolPath = string.Empty;
@@ -69,13 +70,26 @@ public sealed class MainWindowViewModel : ObservableObject
         VideoStandards = new ReadOnlyCollection<string>(new List<string> { "NTSC", "PAL" });
         DiscTypes = new ReadOnlyCollection<string>(new List<string> { "DVD-5", "DVD-9" });
         WriteSpeeds = new ReadOnlyCollection<string>(new List<string> { "1x", "2x", "3x", "4x", "8x", "12x", "16x" });
-        AvailableBackends = new ReadOnlyCollection<string>(new List<string> { "NativePort", "ExternalBridge" });
+        AuthorBackends = new ObservableCollection<BackendOption>
+        {
+            new() { Label = "Native", Value = "NativePort", IsEnabled = true },
+            new() { Label = "External (dvdauthor)", Value = "ExternalBridge", IsEnabled = false },
+        };
+        BurnBackends = new ObservableCollection<BackendOption>
+        {
+            new() { Label = "Native (IMAPI2)", Value = "Imapi2", IsEnabled = true },
+            new() { Label = "Native (SPTI)", Value = "Spti", IsEnabled = false },
+            new() { Label = "External (ImgBurn)", Value = "ImgBurn", IsEnabled = false },
+        };
+        _selectedAuthorBackend = AuthorBackends[0];
+        _selectedBurnBackend = BurnBackends[0];
         VideoBitrates = new ReadOnlyCollection<string>(new List<string> { "Max (~6 Mbps)", "~5 Mbps", "~4 Mbps", "~3 Mbps", "~2 Mbps" });
         FontFamilies = new ReadOnlyCollection<string>(SkiaMenuRenderer.GetAvailableFontFamilies().ToList());
         FontSizes = new ReadOnlyCollection<int>([16, 18, 20, 22, 24, 26, 28, 30, 32, 36]);
 
         Metrics = new ObservableCollection<MetricTile>();
         Queue = new ObservableCollection<QueuedVideoItem>();
+        ChannelOverrides = new ObservableCollection<ChannelOverrideEntry>();
         PipelineStages = new ObservableCollection<PipelineStageItem>();
         ToolStatuses = new ObservableCollection<ToolStatusItem>();
         RecentActivity = new ObservableCollection<string>();
@@ -165,17 +179,38 @@ public sealed class MainWindowViewModel : ObservableObject
         set => SetProperty(ref _currentStage, value);
     }
 
-    public string SelectedBackend
+    public BackendOption? SelectedAuthorBackend
     {
-        get => _selectedBackend;
+        get => _selectedAuthorBackend;
         set
         {
-            if (SetProperty(ref _selectedBackend, value))
+            if (value is not null && !value.IsEnabled)
+                return;
+            if (SetProperty(ref _selectedAuthorBackend, value))
             {
+                OnPropertyChanged(nameof(BackendSummary));
                 RefreshMetrics();
             }
         }
     }
+
+    public BackendOption? SelectedBurnBackend
+    {
+        get => _selectedBurnBackend;
+        set
+        {
+            if (value is not null && !value.IsEnabled)
+                return;
+            if (SetProperty(ref _selectedBurnBackend, value))
+            {
+                OnPropertyChanged(nameof(BackendSummary));
+                RefreshMetrics();
+            }
+        }
+    }
+
+    public string BackendSummary =>
+        $"{SelectedAuthorBackend?.Label ?? "Native"} / {SelectedBurnBackend?.Label ?? "Native (IMAPI2)"}";
 
     public double OverallProgress
     {
@@ -314,7 +349,9 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public ReadOnlyCollection<string> WriteSpeeds { get; }
 
-    public ReadOnlyCollection<string> AvailableBackends { get; }
+    public ObservableCollection<BackendOption> AuthorBackends { get; }
+
+    public ObservableCollection<BackendOption> BurnBackends { get; }
 
     public ReadOnlyCollection<string> VideoBitrates { get; }
 
@@ -325,6 +362,8 @@ public sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<MetricTile> Metrics { get; }
 
     public ObservableCollection<QueuedVideoItem> Queue { get; }
+
+    public ObservableCollection<ChannelOverrideEntry> ChannelOverrides { get; }
 
     public ObservableCollection<PipelineStageItem> PipelineStages { get; }
 
@@ -493,6 +532,7 @@ public sealed class MainWindowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(project);
 
         Queue.Clear();
+        ChannelOverrides.Clear();
 
         OutputFolder = project.Settings.OutputDirectory;
         SelectedVideoStandard = project.Settings.Standard == VideoStandard.Ntsc ? "NTSC" : "PAL";
@@ -500,7 +540,18 @@ public sealed class MainWindowViewModel : ObservableObject
         SelectedWriteSpeed = $"{project.Settings.WriteSpeed}x";
         _baselineBitrateKbps = project.Settings.VideoBitrateKbps;
         SelectedVideoBitrate = FormatVideoBitrate(project.Settings.VideoBitrateKbps);
-        SelectedBackend = project.Settings.PreferExternalAuthoring ? "ExternalBridge" : "NativePort";
+        // Bypass the setter guard (which rejects disabled items) so we can
+        // restore the persisted selection. SetToolStatuses runs immediately after
+        // LoadProject and will correct IsEnabled + fall back if needed.
+        _selectedAuthorBackend = AuthorBackends.FirstOrDefault(b =>
+            b.Value == (project.Settings.PreferExternalAuthoring ? "ExternalBridge" : "NativePort"))
+            ?? AuthorBackends[0];
+        OnPropertyChanged(nameof(SelectedAuthorBackend));
+        _selectedBurnBackend = BurnBackends.FirstOrDefault(b =>
+            b.Value == project.Settings.PreferredBurnBackend.ToString())
+            ?? BurnBackends[0];
+        OnPropertyChanged(nameof(SelectedBurnBackend));
+        OnPropertyChanged(nameof(BackendSummary));
         YtDlpToolPath = project.Settings.YtDlpToolPath ?? string.Empty;
         FfmpegToolPath = project.Settings.FfmpegToolPath ?? string.Empty;
         DvdauthorToolPath = project.Settings.ExternalAuthoringToolPath ?? string.Empty;
@@ -543,6 +594,7 @@ public sealed class MainWindowViewModel : ObservableObject
                         Url = video.Url,
                         Title = video.Title,
                         Channel = IsHostnameLikeChannel(channel.Name) ? string.Empty : channel.Name,
+                        ChannelUrl = channel.ChannelUrl,
                         Duration = video.Duration == TimeSpan.Zero ? "--:--" : video.Duration.ToString(@"hh\:mm\:ss"),
                         Status = "Queued",
                         Detail = hasTranscoded ? "Loaded from project file." : (hasDuration ? "Loaded from project file." : "Fetching metadata..."),
@@ -559,6 +611,21 @@ public sealed class MainWindowViewModel : ObservableObject
                         IsEstimating = !hasTranscoded && !hasDuration,
                     });
             }
+        }
+
+        // Restore channel overrides from saved project.
+        // channel.Name = YouTube name, channel.ChannelNameOverride = user edit (if any).
+        foreach (var channel in project.Channels)
+        {
+            if (string.IsNullOrWhiteSpace(channel.Name))
+                continue;
+
+            // Use ChannelUrl as key; fall back to Name for old projects without URLs.
+            var key = !string.IsNullOrWhiteSpace(channel.ChannelUrl) ? channel.ChannelUrl : channel.Name;
+            var entry = new ChannelOverrideEntry(key, channel.Name);
+            if (channel.ChannelNameOverride is not null)
+                entry.DisplayName = channel.ChannelNameOverride;
+            ChannelOverrides.Add(entry);
         }
 
         PendingUrls = string.Join(Environment.NewLine, Queue.Select(static item => item.Url));
@@ -580,7 +647,8 @@ public sealed class MainWindowViewModel : ObservableObject
             ParseWriteSpeed(SelectedWriteSpeed),
             OutputFolder,
             VideoBitrateKbps: ParseVideoBitrate(SelectedVideoBitrate),
-            PreferExternalAuthoring: string.Equals(SelectedBackend, "ExternalBridge", StringComparison.OrdinalIgnoreCase),
+            PreferExternalAuthoring: SelectedAuthorBackend?.Value == "ExternalBridge",
+            PreferredBurnBackend: Enum.TryParse<BurnBackendKind>(SelectedBurnBackend?.Value, out var burnKind) ? burnKind : BurnBackendKind.Imapi2,
             YtDlpToolPath: NormalizeToolPath(YtDlpToolPath),
             FfmpegToolPath: NormalizeToolPath(FfmpegToolPath),
             ExternalAuthoringToolPath: NormalizeToolPath(DvdauthorToolPath),
@@ -602,6 +670,9 @@ public sealed class MainWindowViewModel : ObservableObject
             .GroupBy(
                 item =>
                 {
+                    // Group by ChannelUrl when available (stable across name changes).
+                    if (!string.IsNullOrWhiteSpace(item.ChannelUrl))
+                        return item.ChannelUrl;
                     var ch = item.Channel?.Trim();
                     return string.IsNullOrWhiteSpace(ch) || IsHostnameLikeChannel(ch) ? "Imported Videos" : ch;
                 },
@@ -613,11 +684,25 @@ public sealed class MainWindowViewModel : ObservableObject
                 var bannerPath = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.ChannelBannerPath))?.ChannelBannerPath;
                 var avatarPath = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.ChannelAvatarPath))?.ChannelAvatarPath;
                 var firstThumb = videos.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v.ThumbnailPath))?.ThumbnailPath ?? string.Empty;
+
+                // Resolve the YouTube name and any user override separately.
+                var rawChannel = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.Channel))?.Channel?.Trim();
+                var youtubeName = rawChannel ?? "Imported Videos";
+                if (string.IsNullOrWhiteSpace(youtubeName) || IsHostnameLikeChannel(youtubeName))
+                    youtubeName = "Imported Videos";
+
+                // group.Key is the canonical channel identifier (ChannelUrl when available, name otherwise).
+                var channelUrl = items.FirstOrDefault(i => !string.IsNullOrWhiteSpace(i.ChannelUrl))?.ChannelUrl ?? group.Key;
+                var overrideEntry = ChannelOverrides.FirstOrDefault(e => string.Equals(e.ChannelUrl, group.Key, StringComparison.OrdinalIgnoreCase));
+                var nameOverride = overrideEntry is { IsOverridden: true } ? overrideEntry.DisplayName : null;
+
                 return new ChannelProject(
-                    group.Key,
+                    youtubeName,
                     bannerPath ?? firstThumb, // banner: channel banner, fallback to first video thumbnail
                     avatarPath ?? firstThumb, // avatar: channel avatar, fallback to first video thumbnail
-                    videos);
+                    videos,
+                    channelUrl,
+                    nameOverride);
             })
             .ToList();
 
@@ -627,8 +712,9 @@ public sealed class MainWindowViewModel : ObservableObject
     public void SetToolStatuses(IEnumerable<ToolAvailability> tools)
     {
         ToolStatuses.Clear();
+        var toolList = tools.ToList();
 
-        foreach (var tool in tools)
+        foreach (var tool in toolList)
         {
             ToolStatuses.Add(
                 new ToolStatusItem(
@@ -637,6 +723,39 @@ public sealed class MainWindowViewModel : ObservableObject
                     tool.ResolvedPath ?? tool.Message,
                     tool.IsAvailable ? _availableBrush : _missingBrush));
         }
+
+        // Update backend option availability based on tool discovery.
+        var dvdauthorAvailable = toolList.Any(t =>
+            string.Equals(t.ToolName, "dvdauthor", StringComparison.OrdinalIgnoreCase) && t.IsAvailable);
+        var imgBurnAvailable = toolList.Any(t =>
+            string.Equals(t.ToolName, "ImgBurn", StringComparison.OrdinalIgnoreCase) && t.IsAvailable);
+
+        foreach (var opt in AuthorBackends)
+        {
+            opt.IsEnabled = opt.Value switch
+            {
+                "NativePort" => true,
+                "ExternalBridge" => dvdauthorAvailable,
+                _ => false,
+            };
+        }
+
+        foreach (var opt in BurnBackends)
+        {
+            opt.IsEnabled = opt.Value switch
+            {
+                "Imapi2" => true,
+                "Spti" => false,
+                "ImgBurn" => imgBurnAvailable,
+                _ => false,
+            };
+        }
+
+        // If the current selection was just disabled, fall back to the first enabled option.
+        if (_selectedAuthorBackend?.IsEnabled == false)
+            SelectedAuthorBackend = AuthorBackends.FirstOrDefault(b => b.IsEnabled) ?? AuthorBackends[0];
+        if (_selectedBurnBackend?.IsEnabled == false)
+            SelectedBurnBackend = BurnBackends.FirstOrDefault(b => b.IsEnabled) ?? BurnBackends[0];
 
         AddRecentActivity("Tool discovery refreshed.");
     }
@@ -682,7 +801,10 @@ public sealed class MainWindowViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(title))
             item.Title = title;
         if (!string.IsNullOrWhiteSpace(channel))
+        {
             item.Channel = channel;
+            UpsertChannelOverride(item.ChannelUrl, channel);
+        }
         if (durationSeconds is > 0)
         {
             item.Duration = TimeSpan.FromSeconds(durationSeconds.Value).ToString(@"hh\:mm\:ss");
@@ -846,7 +968,10 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public void ApplyBuildResult(AuthoringResult result, string workingDirectory)
     {
-        SelectedBackend = result.Backend.ToString();
+        _selectedAuthorBackend = AuthorBackends.FirstOrDefault(b => b.Value == result.Backend.ToString())
+            ?? AuthorBackends[0];
+        OnPropertyChanged(nameof(SelectedAuthorBackend));
+        OnPropertyChanged(nameof(BackendSummary));
         ShowCommandPreview(result.Commands);
         AddRecentActivity($"Working directory: {workingDirectory}");
 
@@ -1157,9 +1282,34 @@ public sealed class MainWindowViewModel : ObservableObject
         Queue.Move(index, newIndex);
     }
 
+    public void UpsertChannelOverride(string channelUrl, string resolvedName)
+    {
+        if (string.IsNullOrWhiteSpace(channelUrl) || string.IsNullOrWhiteSpace(resolvedName))
+            return;
+        if (IsHostnameLikeChannel(resolvedName))
+            return;
+
+        var entry = ChannelOverrides.FirstOrDefault(e => string.Equals(e.ChannelUrl, channelUrl, StringComparison.OrdinalIgnoreCase));
+        if (entry is not null)
+        {
+            entry.ResolvedName = resolvedName;
+        }
+        else
+        {
+            ChannelOverrides.Add(new ChannelOverrideEntry(channelUrl, resolvedName));
+        }
+    }
+
+    public string ResolveChannelDisplayName(string channelUrl, string fallback)
+    {
+        var entry = ChannelOverrides.FirstOrDefault(e => string.Equals(e.ChannelUrl, channelUrl, StringComparison.OrdinalIgnoreCase));
+        return entry?.DisplayName ?? fallback;
+    }
+
     public void ClearQueue()
     {
         Queue.Clear();
+        ChannelOverrides.Clear();
         PendingUrls = string.Empty;
         BuildStatus = "Queue cleared.";
         ResetPipelineStages();
@@ -1412,7 +1562,7 @@ public sealed class MainWindowViewModel : ObservableObject
             Metrics[2].Warning = discWarning;
             Metrics[2].ValueBrush = discValueBrush;
             Metrics[2].IsEstimating = anyEstimating;
-            Metrics[3].Value = SelectedBackend;
+            Metrics[3].Value = BackendSummary;
         }
         else
         {
@@ -1423,7 +1573,7 @@ public sealed class MainWindowViewModel : ObservableObject
                 warning: discWarning, valueBrush: discValueBrush, tooltip: DiscUsageTooltip);
             discTile.IsEstimating = anyEstimating;
             Metrics.Add(discTile);
-            Metrics.Add(new MetricTile("Backend", SelectedBackend, "Native-first authoring flow"));
+            Metrics.Add(new MetricTile("Backend", BackendSummary, "Author / burn"));
         }
 
         OnPropertyChanged(nameof(ProjectSummary));
@@ -1817,6 +1967,56 @@ public sealed class QueuedVideoItem : ObservableObject
     public long EstimatedSizeBytes { get; set; }
 }
 
+public sealed class ChannelOverrideEntry : ObservableObject
+{
+    private string _resolvedName = string.Empty;
+    private string _displayName = string.Empty;
+    private bool _isOverridden;
+
+    public ChannelOverrideEntry(string channelUrl, string resolvedName)
+    {
+        ChannelUrl = channelUrl;
+        _resolvedName = resolvedName;
+        _displayName = resolvedName;
+    }
+
+    public string ChannelUrl { get; }
+
+    public string ResolvedName
+    {
+        get => _resolvedName;
+        set
+        {
+            if (SetProperty(ref _resolvedName, value))
+            {
+                if (!_isOverridden)
+                    DisplayName = value;
+            }
+        }
+    }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        set
+        {
+            if (SetProperty(ref _displayName, value))
+                IsOverridden = !string.Equals(_displayName, _resolvedName, StringComparison.Ordinal);
+        }
+    }
+
+    public bool IsOverridden
+    {
+        get => _isOverridden;
+        private set => SetProperty(ref _isOverridden, value);
+    }
+
+    public void ResetToResolved()
+    {
+        DisplayName = _resolvedName;
+    }
+}
+
 public sealed class PipelineStageItem : ObservableObject
 {
     private string _state;
@@ -1930,4 +2130,40 @@ public sealed class BurnButtonLabelConverter : Avalonia.Data.Converters.IValueCo
 
     public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => throw new NotSupportedException();
+}
+
+public sealed class BoolToOpacityConverter : Avalonia.Data.Converters.IValueConverter
+{
+    public static readonly BoolToOpacityConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => value is true ? 1.0 : 0.35;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+public sealed class BackendOption : System.ComponentModel.INotifyPropertyChanged
+{
+    public string Label { get; init; } = string.Empty;
+    public string Value { get; init; } = string.Empty;
+
+    private bool _isEnabled = true;
+
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        set
+        {
+            if (_isEnabled != value)
+            {
+                _isEnabled = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsEnabled)));
+            }
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    public override string ToString() => Label;
 }
